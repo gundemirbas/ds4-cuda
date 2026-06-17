@@ -13298,17 +13298,17 @@ extern "C" void launch_rope(float *q, float *k, int n_heads, int head_dim,
                        int pos, float freq_base);
 
 /* FP8 attention declarations */
-extern "C" void launch_fp8_attention(
+void launch_fp8_attention(
     const float *d_q, const uint8_t *d_k_cache,
     const uint8_t *d_v_cache, float *d_scores,
     float *d_output, int n_heads, int head_dim,
     int seq_len, int n_kv_heads, int pos);
 
 /* Embedding declarations */
-extern "C" void launch_token_embedding(
+void launch_token_embedding(
     const uint8_t *d_embedding, const int32_t *d_tokens,
     float *d_output, int n_vocab, int n_embd, int n_tokens);
-extern "C" void launch_output_projection(
+void launch_output_projection(
     const float *d_hidden, const uint8_t *d_output_w,
     float *d_logits, int n_vocab, int n_embd);
 
@@ -14016,8 +14016,6 @@ __global__ void fp8_attention_output_kernel(
     d_output[h * head_dim + threadIdx.x] = out_val;
 }
 
-extern "C" {
-
 void launch_fp8_attention(
     const float *d_q, const uint8_t *d_k_cache,
     const uint8_t *d_v_cache, float *d_scores,
@@ -14036,8 +14034,6 @@ void launch_fp8_attention(
     fp8_attention_output_kernel<<<blocks_o, threads_o>>>(
         d_scores, d_v_cache, d_output, n_heads, head_dim, seq_len, n_kv_heads);
 }
-
-} // extern "C"
 
 
 
@@ -14113,8 +14109,6 @@ __global__ void output_projection_fp8_kernel(
     d_logits[v] = sum;
 }
 
-extern "C" {
-
 void launch_token_embedding(
     const uint8_t *d_embedding, const int32_t *d_tokens,
     float *d_output, int n_vocab, int n_embd, int n_tokens)
@@ -14134,8 +14128,6 @@ void launch_output_projection(
     output_projection_fp8_kernel<<<blocks, threads>>>(
         d_hidden, d_output_w, d_logits, n_vocab, n_embd);
 }
-
-} // extern "C"
 
 
 
