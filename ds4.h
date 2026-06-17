@@ -396,6 +396,10 @@ float sst_fp8_e4m3_to_float(uint8_t value);
  * FP8 KV Cache types (merged from ds4_fp8_kv_cache.h)
  * ========================================================================= */
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 typedef struct ds4_fp8_kv_cache ds4_fp8_kv_cache;
 
 static inline float ds4_f8e4m3_to_f32(uint8_t v) {
@@ -438,6 +442,10 @@ void ds4_fp8_kv_cache_get_fp8_ptrs(
 uint32_t ds4_fp8_kv_cache_len(const ds4_fp8_kv_cache *cache);
 uint64_t ds4_fp8_kv_cache_memory_bytes(const ds4_fp8_kv_cache *cache);
 void ds4_fp8_kv_cache_stats(const ds4_fp8_kv_cache *cache, FILE *fp);
+
+#ifdef __cplusplus
+}
+#endif
 
 /* =========================================================================
  * SSD Streaming Expert Cache types (merged from ds4_ssd_streaming.h)
