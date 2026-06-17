@@ -1634,6 +1634,10 @@ typedef struct {
     ds4_kv *kv;
     ds4_tensor *tensors;
     char *model_dir;  /* Path to model directory (safetensors) */
+    
+    /* Safetensors multi-shard support */
+    uint64_t shard_count;
+    void *shard_models;  /* sst_sharded_model *, kept alive for mmap access */
 } ds4_model;
 
 static uint64_t scalar_value_size(uint32_t type) {
@@ -1834,6 +1838,11 @@ static void model_close(ds4_model *m) {
     free(m->tensors);
     if (m->map) munmap((void *)m->map, (size_t)m->size);
     if (m->fd >= 0) close(m->fd);
+    /* Free safetensors shard metadata if present */
+    if (m->shard_models) {
+        sst_sharded_model_free((sst_sharded_model *)m->shard_models);
+        m->shard_models = NULL;
+    }
     memset(m, 0, sizeof(*m));
     m->fd = -1;
 }
@@ -2053,6 +2062,9 @@ static bool model_open_safetensors(ds4_model *m, const char *model_dir,
     m->fd = first->fd;
     m->map = first->map;
     m->size = first->file_size;
+    /* Transfer ownership: prevent sst_sharded_model_free from munmap/closing the first shard */
+    first->map = NULL;
+    first->fd = -1;
     
     /* Count total tensors across all shards */
     uint64_t total_tensors = 0;
@@ -2072,7 +2084,69 @@ static bool model_open_safetensors(ds4_model *m, const char *model_dir,
     fprintf(stderr, "ds4: safetensors: %llu shards, %llu tensors\n",
             (unsigned long long)sst->n_models, (unsigned long long)total_tensors);
     
-    /* TODO: Parse tensor metadata into ds4_tensor array */
+    /* Allocate and populate ds4_tensor array from safetensors metadata */
+    m->tensors = calloc(total_tensors, sizeof(ds4_tensor));
+    if (!m->tensors) {
+        fprintf(stderr, "ds4: out of memory for tensor table\n");
+        sst_sharded_model_free(sst);
+        return false;
+    }
+    
+    uint64_t ti = 0;
+    for (uint64_t shard = 0; shard < sst->n_models; shard++) {
+        sst_model *sm = sst->models[shard];
+        for (uint64_t j = 0; j < sm->n_tensors; j++) {
+            sst_tensor *st = &sm->tensors[j];
+            ds4_tensor *t = &m->tensors[ti++];
+            
+            /* Map sst_dtype to ds4_tensor type */
+            switch (st->dtype) {
+                case SST_DTYPE_F32:    t->type = DS4_TENSOR_F32;   break;
+                case SST_DTYPE_F16:    t->type = DS4_TENSOR_F16;   break;
+                case SST_DTYPE_BF16:   t->type = DS4_TENSOR_BF16;  break;
+                case SST_DTYPE_F8_E4M3: t->type = DS4_TENSOR_F8_E4M3; break;
+                case SST_DTYPE_NVFP4:  t->type = DS4_TENSOR_NVFP4; break;
+                case SST_DTYPE_MXFP4:  t->type = DS4_TENSOR_MXFP4; break;
+                default:               t->type = DS4_TENSOR_F32;   break;
+            }
+            
+            /* Set name (strdup to own independently — sst will be freed later) */
+            size_t nlen = strlen(st->name);
+            char *name_copy = strdup(st->name);
+            if (!name_copy) {
+                fprintf(stderr, "ds4: out of memory\n");
+                sst_sharded_model_free(sst);
+                return false;
+            }
+            t->name.ptr = name_copy;
+            t->name.len = nlen;
+            
+            /* Set dimensions */
+            t->ndim = (uint32_t)st->ndim;
+            uint64_t elems = 1;
+            for (uint32_t d = 0; d < t->ndim && d < DS4_MAX_DIMS; d++) {
+                t->dim[d] = st->shape[d];
+                if (st->shape[d] != 0 && elems > UINT64_MAX / st->shape[d]) {
+                    elems = UINT64_MAX;
+                } else {
+                    elems *= st->shape[d];
+                }
+            }
+            t->elements = elems;
+            
+            /* Set offsets: abs_offset is file offset within the shard.
+             * For multi-shard access, the caller must know which shard.
+             * We store a sentinel so code can detect safetensors tensors. */
+            t->abs_offset = st->data_offset;
+            t->rel_offset = st->data_offset;
+            t->bytes = st->data_size;
+        }
+    }
+    
+    /* Store shard info for multi-shard data access */
+    m->shard_count = sst->n_models;
+    m->shard_models = sst;  /* Keep sst alive — we own it now */
+    
     /* TODO: Load config.json for model parameters */
     /* TODO: Load tokenizer.json */
     
