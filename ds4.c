@@ -2017,7 +2017,7 @@ static bool is_safetensors_model(const char *path) {
     while ((ent = readdir(dir)) != NULL) {
         const char *name = ent->d_name;
         size_t len = strlen(name);
-        if (len > 13 && strcmp(name + len - 13, ".safetensors") == 0) {
+        if (len > 12 && strcmp(name + len - 12, ".safetensors") == 0) {
             found = true;
             break;
         }
