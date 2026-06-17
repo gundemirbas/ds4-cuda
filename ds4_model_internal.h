@@ -89,6 +89,7 @@ typedef struct {
     /* Extra field for safetensors loader — vocab/model data not part of GGUF */
     void *vocab_data;
     char *key_buf;
+    char *model_dir;  /* Path to model directory (safetensors) */
 } ds4_model;
 
 #endif /* DS4_MODEL_INTERNAL_H */
