@@ -13444,6 +13444,8 @@ __global__ void fp32_to_fp8_kernel(const float *in, uint8_t *out, int n) {
  * Cache struct (opaque, only here we know the internals)
  * ======================================================================== */
 
+#include <stdint.h>
+
 struct ds4_fp8_kv_cache {
     uint32_t n_ctx, n_layers, n_kv_heads, head_dim;
     uint8_t *d_k_cache;
