@@ -13415,7 +13415,7 @@ struct ds4_fp8_kv_cache {
     unsigned long long total_bytes;
 };
 
-ds4_fp8_kv_cache *ds4_fp8_kv_cache_alloc_gpu(ds4_fp8_kv_cache *cache) {
+extern "C" ds4_fp8_kv_cache *ds4_fp8_kv_cache_alloc_gpu(ds4_fp8_kv_cache *cache) {
     if (!cache) return NULL;
     unsigned long long layer = (unsigned long long)cache->n_ctx * cache->n_kv_heads * cache->head_dim;
     unsigned long long total = layer * cache->n_layers * 2;
@@ -13427,20 +13427,20 @@ ds4_fp8_kv_cache *ds4_fp8_kv_cache_alloc_gpu(ds4_fp8_kv_cache *cache) {
     return cache;
 }
 
-void ds4_fp8_kv_cache_free_gpu(ds4_fp8_kv_cache *cache) {
+extern "C" void ds4_fp8_kv_cache_free_gpu(ds4_fp8_kv_cache *cache) {
     if (!cache) return;
     if (cache->d_k_cache) cudaFree(cache->d_k_cache);
     if (cache->d_v_cache) cudaFree(cache->d_v_cache);
 }
 
-void ds4_fp8_kv_cache_reset_gpu(ds4_fp8_kv_cache *cache) {
+extern "C" void ds4_fp8_kv_cache_reset_gpu(ds4_fp8_kv_cache *cache) {
     if (!cache) return;
     unsigned long long total = (unsigned long long)cache->n_ctx * cache->n_layers * cache->n_kv_heads * cache->head_dim;
     cudaMemset(cache->d_k_cache, 0, total);
     cudaMemset(cache->d_v_cache, 0, total);
 }
 
-void ds4_fp8_kv_cache_append_gpu(
+extern "C" void ds4_fp8_kv_cache_append_gpu(
     ds4_fp8_kv_cache *cache, unsigned int layer, unsigned int pos,
     const float *d_k, const float *d_v)
 {
@@ -13449,7 +13449,7 @@ void ds4_fp8_kv_cache_append_gpu(
     /* TODO: implement FP32->FP8 conversion + append */
 }
 
-void ds4_fp8_kv_cache_get_ptrs_gpu(
+extern "C" void ds4_fp8_kv_cache_get_ptrs_gpu(
     ds4_fp8_kv_cache *cache, unsigned int layer,
     void **d_k, void **d_v, unsigned int *stride)
 {
