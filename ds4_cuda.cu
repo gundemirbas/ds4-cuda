@@ -13444,17 +13444,16 @@ __global__ void fp32_to_fp8_kernel(const float *in, uint8_t *out, int n) {
  * Cache struct (opaque, only here we know the internals)
  * ======================================================================== */
 
-#include <stdint.h>
 /* Struct must match the CPU-side definition in ds4.c exactly */
 struct ds4_fp8_kv_cache {
-    uint32_t n_ctx;
-    uint32_t n_layers;
-    uint32_t n_kv_heads;
-    uint32_t head_dim;
+    unsigned int n_ctx;
+    unsigned int n_layers;
+    unsigned int n_kv_heads;
+    unsigned int head_dim;
     void *d_k_cache;
     void *d_v_cache;
-    uint32_t cur_len;
-    uint64_t total_bytes;
+    unsigned int cur_len;
+    unsigned long long total_bytes;
 };
 
 /* ========================================================================
@@ -13498,7 +13497,7 @@ void ds4_fp8_kv_cache_reset_gpu(ds4_fp8_kv_cache *cache) {
 }
 
 void ds4_fp8_kv_cache_append_gpu(
-    ds4_fp8_kv_cache *cache, uint32_t layer, uint32_t pos,
+    ds4_fp8_kv_cache *cache, unsigned int layer, unsigned int pos,
     const float *d_k, const float *d_v)
 {
     if (!cache || layer >= cache->n_layers || pos >= cache->n_ctx) return;
@@ -13517,8 +13516,8 @@ void ds4_fp8_kv_cache_append_gpu(
 }
 
 void ds4_fp8_kv_cache_get_ptrs_gpu(
-    ds4_fp8_kv_cache *cache, uint32_t layer,
-    void **d_k, void **d_v, uint32_t *stride)
+    ds4_fp8_kv_cache *cache, unsigned int layer,
+    void **d_k, void **d_v, unsigned int *stride)
 {
     if (!cache || layer >= cache->n_layers) {
         if (d_k) *d_k = NULL;
