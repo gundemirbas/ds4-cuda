@@ -13770,13 +13770,15 @@ void launch_emul(float *a, const float *b, int n) { emul_kernel<<<(n+255)/256, 2
 __global__ void topk_256_kernel(const float *scores, int *indices, int k) {
     __shared__ float sv[256];
     __shared__ int si[256];
+    __shared__ float tval[256];
+    __shared__ int tidx[256];
+    __shared__ int best_idx_s;
+    __shared__ float best_val_s;
     int tid = threadIdx.x;
     if (tid < 256) { sv[tid] = scores[tid]; si[tid] = tid; }
     __syncthreads();
     /* Selection sort: find top k by iterating k times, each time thread 0 finds the max */
     for (int i = 0; i < k; i++) {
-        __shared__ int best_idx_s;
-        __shared__ float best_val_s;
         if (tid == 0) { best_idx_s = -1; best_val_s = -1e38f; }
         __syncthreads();
         /* Each thread checks its elements */
@@ -13789,8 +13791,6 @@ __global__ void topk_256_kernel(const float *scores, int *indices, int k) {
             }
         }
         /* Reduce to find global best */
-        __shared__ float tval[256];
-        __shared__ int tidx[256];
         tval[tid] = local_best;
         tidx[tid] = local_best_idx;
         __syncthreads();
@@ -13805,13 +13805,13 @@ __global__ void topk_256_kernel(const float *scores, int *indices, int k) {
         }
         if (tid == 0) {
             indices[i] = si[tidx[0]];
-            sv[tidx[0]] = -1e38f; /* remove from future consideration */
+            sv[tidx[0]] = -1e38f;
         }
         __syncthreads();
     }
 }
-extern "C"
-void launch_topk_256(const float *scores, int *indices, int k) {
+
+void launch_topk_256void launch_topk_256(const float *scores, int *indices, int k) {
     topk_256_kernel<<<1, 256>>>(scores, indices, k);
 }
 
