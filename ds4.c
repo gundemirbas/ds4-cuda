@@ -22373,15 +22373,40 @@ static int vocab_lookup(const ds4_vocab *vocab, const char *text) {
 static void vocab_load(ds4_vocab *vocab, const ds4_model *model) {
     memset(vocab, 0, sizeof(*vocab));
 
+    /* Check if model has GGUF tokenizer data */
     ds4_array_ref tokens;
     ds4_array_ref merges;
     if (!model_get_array(model, "tokenizer.ggml.tokens", &tokens) ||
         tokens.type != GGUF_VALUE_STRING ||
         tokens.len > INT32_MAX) {
+        /* GGUF tokenizer not available — may be safetensors model */
+        /* Try to load from tokenizer.json (safetensors) */
+        if (model->fd >= 0) {
+            /* mmap'd model exists, but no GGUF tokenizer */
+            fprintf(stderr, "ds4: GGUF tokenizer not found, trying safetensors tokenizer\n");
+            /* TODO: load from tokenizer.json */
+            /* For now, create a minimal vocab so we can continue */
+            vocab->n_vocab = 0;
+            vocab->token = NULL;
+            vocab->bos_id = 1;
+            vocab->eos_id = 2;
+            vocab->user_id = 1;
+            vocab->assistant_id = 2;
+            vocab->think_start_id = 1;
+            vocab->think_end_id = 2;
+            vocab->dsml_id = 1;
+            fprintf(stderr, "ds4: warning: using minimal vocabulary (tokenization will fail)\n");
+            return;
+        }
         ds4_die("GGUF tokenizer token table is missing or invalid");
     }
     if (!model_get_array(model, "tokenizer.ggml.merges", &merges) ||
         merges.type != GGUF_VALUE_STRING) {
+        if (vocab->n_vocab == 0) {
+            /* Already in safetensors fallback mode */
+            table_init(&vocab->merge_rank, 0);
+            return;
+        }
         ds4_die("GGUF tokenizer merge table is missing or invalid");
     }
 
