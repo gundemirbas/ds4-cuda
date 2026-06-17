@@ -28838,14 +28838,14 @@ double sst_model_get_metadata_float(sst_model *m, const char *k) { (void)m; (voi
 /* The actual cache struct is defined in the .cu file for CUDA access */
 /* struct ds4_fp8_kv_cache — merged from ds4_fp8_kv_cache.c, matches forward decl in ds4.h */
 struct ds4_fp8_kv_cache {
-    uint32_t n_ctx;
-    uint32_t n_layers;
-    uint32_t n_kv_heads;
-    uint32_t head_dim;
-    void *d_k_cache;   /* GPU pointer */
-    void *d_v_cache;   /* GPU pointer */
-    uint32_t cur_len;
-    uint64_t total_bytes;
+    unsigned int n_ctx;
+    unsigned int n_layers;
+    unsigned int n_kv_heads;
+    unsigned int head_dim;
+    void *d_k_cache;
+    void *d_v_cache;
+    unsigned int cur_len;
+    unsigned long long total_bytes;
 };
 
 /* CUDA functions (defined in ds4_fp8_kv_cache.cu) */
