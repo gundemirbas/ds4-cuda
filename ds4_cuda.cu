@@ -13254,3 +13254,91 @@ extern "C" int ds4_gpu_matmul_q8_0_hc_expand_tensor(
            ds4_gpu_hc_expand_split_tensor(out_hc, block_out, residual_hc,
                                             split, n_embd, n_hc);
 }
+
+/* =========================================================================
+ * NVFP4/FP8 Kernel Wrappers (ds4-cuda)
+ * ========================================================================= */
+
+/* Forward kernel declarations */
+extern "C" void launch_gemv_nvfp4(const float *x, const uint8_t *w, const uint8_t *ws,
+                             float *y, int M, int K);
+extern "C" void launch_gemv_f8e4m3(const float *x, const uint8_t *w, float *y, int M, int K);
+extern "C" void launch_rms_norm(const float *x, float *out, const float *weight,
+                           int n, float eps);
+extern "C" void launch_rope(float *q, float *k, int n_heads, int head_dim,
+                       int pos, float freq_base);
+
+/* FP8 attention declarations */
+extern "C" void launch_fp8_attention(const float *q, const uint8_t *k, const uint8_t *v,
+                               float *out, int n_heads, int head_dim, int kv_len,
+                               float scale);
+
+/* Embedding declarations */
+extern "C" void launch_token_embedding(const int *tokens, const uint8_t *emb,
+                                float *out, int n_tokens, int n_embd, int n_vocab);
+extern "C" void launch_output_projection(const float *hidden, const uint8_t *proj,
+                                     float *logits, int n_tokens, int n_embd, int n_vocab);
+
+/* NVFP4 GEMV wrapper */
+int ds4_gpu_matmul_nvfp4_tensor(
+    ds4_gpu_tensor       *out,
+    const void             *model_map,
+    uint64_t                model_size,
+    uint64_t                weight_offset,
+    uint64_t                in_dim,
+    uint64_t                out_dim,
+    const ds4_gpu_tensor *x,
+    uint64_t                n_tok) {
+    const void *w = (const char*)model_map + weight_offset;
+    launch_gemv_nvfp4((const float*)x->ptr, (const uint8_t*)w, NULL,
+                      (float*)out->ptr, out_dim, in_dim);
+    return 1;
+}
+
+/* FP8 E4M3 GEMV wrapper */
+int ds4_gpu_matmul_f8e4m3_tensor(
+    ds4_gpu_tensor       *out,
+    const void             *model_map,
+    uint64_t                model_size,
+    uint64_t                weight_offset,
+    uint64_t                in_dim,
+    uint64_t                out_dim,
+    const ds4_gpu_tensor *x,
+    uint64_t                n_tok) {
+    const void *w = (const char*)model_map + weight_offset;
+    launch_gemv_f8e4m3((const float*)x->ptr, (const uint8_t*)w,
+                       (float*)out->ptr, out_dim, in_dim);
+    return 1;
+}
+
+/* FP8 attention wrapper */
+int ds4_gpu_attention_fp8_heads_tensor(
+    ds4_gpu_tensor       *heads,
+    const void             *model_map,
+    uint64_t                model_size,
+    uint64_t                sinks_offset,
+    const ds4_gpu_tensor *q,
+    const uint8_t         *k_fp8_cache,
+    const uint8_t         *v_fp8_cache,
+    uint32_t                n_raw,
+    uint32_t                raw_cap,
+    uint32_t                raw_start,
+    uint32_t                n_head,
+    uint32_t                head_dim) {
+    launch_fp8_attention((const float*)q->ptr, k_fp8_cache, v_fp8_cache,
+                         (float*)heads->ptr, n_head, head_dim, n_raw,
+                         1.0f / sqrtf(head_dim));
+    return 1;
+}
+
+/* FP8 KV cache quantize + append wrapper */
+int ds4_gpu_kv_fp8_quantize_append_tensor(
+    ds4_gpu_tensor       *kv,
+    ds4_gpu_tensor       *raw_cache,
+    uint32_t                raw_cap,
+    uint32_t                row,
+    uint32_t                head_dim,
+    uint32_t                n_rot) {
+    /* TODO: Implement FP8 KV cache append on GPU */
+    return 0;
+}

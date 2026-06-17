@@ -22,10 +22,22 @@ all: ds4 ds4-server ds4-bench ds4-eval ds4-agent
 ds4_kv_cache_cu.o: ds4_kv_cache.cu
 	$(NVCC) $(NVFLAGS) -I. $< -c -o $@
 
+ds4_cuda_forward.o: ds4_cuda_forward.cu
+	$(NVCC) $(NVFLAGS) -I. $< -c -o $@
+
+ds4_cuda_fp8_attention.o: ds4_cuda_fp8_attention.cu
+	$(NVCC) $(NVFLAGS) -I. $< -c -o $@
+
+ds4_cuda_embedding.o: ds4_cuda_embedding.cu
+	$(NVCC) $(NVFLAGS) -I. $< -c -o $@
+
+ds4_cuda_nvfp4_mmq.o: ds4_cuda_nvfp4_mmq.cu
+	$(NVCC) $(NVFLAGS) -I. $< -c -o $@
+
 # Ortak objeler
 COMMON = ds4.o ds4_help.o ds4_kvstore.o ds4_ssd.o ds4_distributed.o rax.o linenoise.o
 NEW_C = ds4_safetensors.o ds4_kv_cache.o ds4_model_config.o ds4_expert_cache.o
-CUDA = ds4_cuda.o ds4_kv_cache_cu.o
+CUDA = ds4_cuda.o ds4_kv_cache_cu.o ds4_cuda_forward.o ds4_cuda_fp8_attention.o ds4_cuda_embedding.o ds4_cuda_nvfp4_mmq.o
 
 # CLI
 ds4: $(COMMON) ds4_cli.o $(NEW_C) $(CUDA)
