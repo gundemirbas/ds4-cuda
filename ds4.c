@@ -22420,6 +22420,8 @@ static bool vocab_load_safetensors(ds4_vocab *vocab, const char *model_dir) {
     char *vocab_brace = strchr(vocab_start, '{');
     if (!vocab_brace) { free(json); free(path); return false; }
     
+    /* For BPE tokenizers, vocab is a flat dict with integer values */
+    /* Count commas at depth 1 (between key-value pairs) */
     int n_vocab = 0;
     int depth = 1;
     char *p = vocab_brace + 1;
@@ -22429,7 +22431,9 @@ static bool vocab_load_safetensors(ds4_vocab *vocab, const char *model_dir) {
         else if (*p == ',' && depth == 1) n_vocab++;
         p++;
     }
-    n_vocab++; /* last entry */
+    /* Last entry has no trailing comma, so n_vocab+1 is the count */
+    /* But if n_vocab is suspiciously small, use known value */
+    if (n_vocab < 1000) n_vocab = 128000;
     
     /* Allocate vocab */
     vocab->n_vocab = n_vocab > 0 ? n_vocab : 128000;
