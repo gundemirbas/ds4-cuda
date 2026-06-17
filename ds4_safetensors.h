@@ -46,6 +46,7 @@ typedef struct {
     uint64_t n_tensors;
     sst_tensor *tensors;
     void *index;
+    char *name; /* file path */
 } sst_model;
 
 /* Single file */

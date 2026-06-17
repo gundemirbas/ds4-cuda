@@ -217,6 +217,7 @@ sst_model *sst_model_load(const char *path) {
     m->map = map;
     m->file_size = file_size;
     m->header_size = *(uint64_t *)m->map;
+    m->name = strdup(path);
 
     const char *json_start = (const char *)m->map + 8;
     const char *json_end = json_start + m->header_size;
@@ -270,6 +271,7 @@ void sst_model_free(sst_model *m) {
     }
     if (m->map) munmap(m->map, m->file_size);
     if (m->fd >= 0) close(m->fd);
+    free(m->name);
     free(m);
 }
 
@@ -283,7 +285,7 @@ sst_tensor *sst_model_find_tensor(sst_model *m, const char *name) {
 
 void *sst_model_tensor_data(sst_model *m, sst_tensor *t) {
     if (!m || !t) return NULL;
-    uint64_t off = t->data_offset;
+    uint64_t off = m->data_offset + t->data_offset;
     if (off + t->data_size > m->file_size) return NULL;
     return m->map + off;
 }
@@ -400,10 +402,12 @@ sst_tensor *sst_sharded_model_find_tensor(sst_sharded_model *m, const char *name
 
 void *sst_sharded_model_tensor_data(sst_sharded_model *m, sst_tensor *t) {
     if (!m || !t) return NULL;
+    /* Find the model that actually contains this tensor by name */
     for (uint64_t i = 0; i < m->n_models; i++) {
-        sst_model *sm = m->models[i];
-        void *data = sst_model_tensor_data(sm, t);
-        if (data) return data;
+        sst_tensor *found = sst_model_find_tensor(m->models[i], t->name);
+        if (found == t) {
+            return sst_model_tensor_data(m->models[i], t);
+        }
     }
     return NULL;
 }

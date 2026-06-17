@@ -1,85 +1,46 @@
-# ds4-cuda Makefile — NVFP4/MXFP4 Tensor Core Inference for DGX Spark
-# Targets: sm_121 (DGX Spark / NVIDIA GB10)
+# Makefile for ds4-cuda (NVFP4 port of antirez/ds4)
+# Target: DGX Spark (NVIDIA GB10, sm_121a)
 
-CC       = gcc
-CXX      = g++
-NVCC     ?= /usr/local/cuda-13.0/bin/nvcc
-CFLAGS   = -O3 -g -std=c99 -Wall -Wextra -Wno-unused-parameter
-CXXFLAGS = -O3 -g -std=c++17 -Wall -Wextra
-NVFLAGS  = -O3 --use_fast_math -gencode arch=compute_121a,code=sm_121a
+CC = gcc
+NVCC = nvcc
+CFLAGS = -O3 -g -std=c99 -Wall -Wextra -Wno-unused-parameter -D_GNU_SOURCE -fno-finite-math-only -I.
+NVFLAGS = -O3 -g --use_fast_math -gencode arch=compute_121a,code=sm_121a -Xcompiler -pthread
+CUDA_LDLIBS = -lm -Xcompiler -pthread -lcudart -lcublas
 
-INCDIR  = include
-SRCDIR  = src
-CUDA_DIR = cuda
-BUILDDIR = build
+# Ortak objeler (tüm binary'lerde kullanılan)
+COMMON_SRCS = ds4.c ds4_help.c ds4_kvstore.c ds4_ssd.c ds4_distributed.c rax.c linenoise.c
 
-LIBS = -lm -lcudart -lcublas
+.PHONY: all clean
 
-C_OBJS = \
-    $(BUILDDIR)/ds4_safetensors.o \
-    $(BUILDDIR)/ds4_expert_cache.o \
-    $(BUILDDIR)/ds4_model_config.o \
-    $(BUILDDIR)/ds4_kv_cache.o
+all: ds4 ds4-server ds4-bench ds4-eval ds4-agent
 
-CUDA_OBJS = \
-    $(BUILDDIR)/ds4_cuda_nvfp4_mmq.o \
-    $(BUILDDIR)/ds4_cuda_forward.o \
-    $(BUILDDIR)/ds4_cuda_embedding.o \
-    $(BUILDDIR)/ds4_cuda_fp8_attention.o \
-    $(BUILDDIR)/ds4_kv_cache_cu.o \
-    $(BUILDDIR)/ds4_main.o \
-    $(BUILDDIR)/ds4_layer_forward.o
+# C compilation
+%.o: %.c
+	$(CC) $(CFLAGS) -c $< -o $@
 
-ALL_OBJS = $(C_OBJS) $(CUDA_OBJS)
+# CUDA compilation
+%.o: %.cu
+	$(NVCC) $(NVFLAGS) -I. $< -c -o $@
 
-.PHONY: all clean test
+# CLI (ana binary)
+ds4: ds4.o ds4_cli.o ds4_help.o ds4_kvstore.o ds4_ssd.o ds4_distributed.o rax.o linenoise.o ds4_cuda.o
+	$(NVCC) $(NVFLAGS) $^ -o $@ $(CUDA_LDLIBS)
 
-all: $(BUILDDIR)/ds4
+# Server
+ds4-server: ds4.o ds4_server.o ds4_help.o ds4_kvstore.o ds4_ssd.o ds4_distributed.o rax.o linenoise.o ds4_cuda.o
+	$(NVCC) $(NVFLAGS) $^ -o $@ $(CUDA_LDLIBS)
 
-$(BUILDDIR)/ds4_safetensors.o: $(SRCDIR)/ds4_safetensors.c | $(BUILDDIR)
-	$(CC) $(CFLAGS) -I$(INCDIR) -c $< -o $@
+# Benchmark
+ds4-bench: ds4.o ds4_bench.o ds4_help.o ds4_kvstore.o ds4_ssd.o ds4_distributed.o rax.o linenoise.o ds4_cuda.o
+	$(NVCC) $(NVFLAGS) $^ -o $@ $(CUDA_LDLIBS)
 
-$(BUILDDIR)/ds4_expert_cache.o: $(SRCDIR)/ds4_expert_cache.c | $(BUILDDIR)
-	$(CC) $(CFLAGS) -I$(INCDIR) -c $< -o $@
+# Eval
+ds4-eval: ds4.o ds4_eval.o ds4_help.o ds4_kvstore.o ds4_ssd.o ds4_distributed.o rax.o linenoise.o ds4_cuda.o
+	$(NVCC) $(NVFLAGS) $^ -o $@ $(CUDA_LDLIBS)
 
-$(BUILDDIR)/ds4_model_config.o: $(SRCDIR)/ds4_model_config.c | $(BUILDDIR)
-	$(CC) $(CFLAGS) -I$(INCDIR) -c $< -o $@
-
-$(BUILDDIR)/ds4_kv_cache.o: $(SRCDIR)/ds4_kv_cache.c | $(BUILDDIR)
-	$(CC) $(CFLAGS) -I$(INCDIR) -c $< -o $@
-
-$(BUILDDIR)/ds4_cuda_nvfp4_mmq.o: $(CUDA_DIR)/ds4_cuda_nvfp4_mmq.cu | $(BUILDDIR)
-	$(NVCC) $(NVFLAGS) -I$(INCDIR) -I$(CUDA_DIR) -c $< -o $@
-
-$(BUILDDIR)/ds4_cuda_forward.o: $(CUDA_DIR)/ds4_cuda_forward.cu | $(BUILDDIR)
-	$(NVCC) $(NVFLAGS) -I$(INCDIR) -I$(CUDA_DIR) -c $< -o $@
-
-$(BUILDDIR)/ds4_cuda_embedding.o: $(CUDA_DIR)/ds4_cuda_embedding.cu | $(BUILDDIR)
-	$(NVCC) $(NVFLAGS) -I$(INCDIR) -I$(CUDA_DIR) -c $< -o $@
-
-$(BUILDDIR)/ds4_cuda_fp8_attention.o: $(CUDA_DIR)/ds4_cuda_fp8_attention.cu | $(BUILDDIR)
-	$(NVCC) $(NVFLAGS) -I$(INCDIR) -I$(CUDA_DIR) -c $< -o $@
-
-$(BUILDDIR)/ds4_kv_cache_cu.o: $(SRCDIR)/ds4_kv_cache.cu | $(BUILDDIR)
-	$(NVCC) $(NVFLAGS) -I$(INCDIR) -I$(CUDA_DIR) -c $< -o $@
-
-$(BUILDDIR)/ds4_main.o: $(SRCDIR)/ds4_main.cu | $(BUILDDIR)
-	$(NVCC) $(NVFLAGS) -I$(INCDIR) -I$(CUDA_DIR) -c $< -o $@
-
-$(BUILDDIR)/ds4_layer_forward.o: $(SRCDIR)/ds4_layer_forward.cu | $(BUILDDIR)
-	$(NVCC) $(NVFLAGS) -I$(INCDIR) -I$(CUDA_DIR) -c $< -o $@
-
-$(BUILDDIR)/ds4: $(ALL_OBJS)
-	$(NVCC) $(NVFLAGS) -I$(INCDIR) -I$(CUDA_DIR) $^ -o $@ $(LIBS)
-
-$(BUILDDIR):
-	mkdir -p $(BUILDDIR)
-
-test: $(BUILDDIR)/test_safetensors
-	./$(BUILDDIR)/test_safetensors
-
-$(BUILDDIR)/test_safetensors: $(BUILDDIR)/ds4_safetensors.o $(SRCDIR)/ds4_safetensors.c
-	$(CC) $(CFLAGS) -I$(INCDIR) $^ -o $@ -lm
+# Agent
+ds4-agent: ds4.o ds4_agent.o ds4_web.o ds4_help.o ds4_kvstore.o ds4_ssd.o ds4_distributed.o rax.o linenoise.o ds4_cuda.o
+	$(NVCC) $(NVFLAGS) $^ -o $@ $(CUDA_LDLIBS)
 
 clean:
-	rm -rf $(BUILDDIR)
+	rm -f *.o ds4 ds4-server ds4-bench ds4-eval ds4-agent
