@@ -13535,7 +13535,6 @@ __global__ void ds4_nvfp4_gemm(
     for (int kg = 0; kg < K4; kg += 16) {
         float xsc = ds4_decode_ue4m3(xs[kg / 16]);
         float ysc = ds4_decode_ue4m3(ys[kg / 16]);
-        #pragma unroll 8
         for (int v = 0; v < 16; v++) {
             int k = kg + v;
             uint8_t xn = (k & 1) ? ((xr[k / 2] >> 4) & 0xF) : (xr[k / 2] & 0xF);
