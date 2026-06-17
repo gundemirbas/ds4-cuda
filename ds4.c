@@ -22480,6 +22480,7 @@ static void vocab_load(ds4_vocab *vocab, const ds4_model *model) {
         tokens.len > INT32_MAX) {
         /* GGUF tokenizer not available — may be safetensors model */
         /* Try to load from tokenizer.json (safetensors) */
+        fprintf(stderr, "ds4: vocab_load debug: fd=%d model_dir=%s\n", model->fd, model->model_dir ? model->model_dir : "NULL");
         if (model->fd >= 0 && model->model_dir) {
             fprintf(stderr, "ds4: GGUF tokenizer not found, trying safetensors tokenizer\n");
             if (vocab_load_safetensors(vocab, model->model_dir)) {
