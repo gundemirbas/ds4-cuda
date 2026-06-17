@@ -13445,11 +13445,14 @@ __global__ void fp32_to_fp8_kernel(const float *in, uint8_t *out, int n) {
  * ======================================================================== */
 
 #include <stdint.h>
-
+/* Struct must match the CPU-side definition in ds4.c exactly */
 struct ds4_fp8_kv_cache {
-    uint32_t n_ctx, n_layers, n_kv_heads, head_dim;
-    uint8_t *d_k_cache;
-    uint8_t *d_v_cache;
+    uint32_t n_ctx;
+    uint32_t n_layers;
+    uint32_t n_kv_heads;
+    uint32_t head_dim;
+    void *d_k_cache;
+    void *d_v_cache;
     uint32_t cur_len;
     uint64_t total_bytes;
 };
