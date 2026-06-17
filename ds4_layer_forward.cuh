@@ -155,7 +155,7 @@ void ds4_layer_forward(
                         k + KVD/2);  /* TODO: proper V separation */
 
     /* ---- 6. Attention ---- */
-    uint8_t *d_k_cache, *d_v_cache;
+    void *d_k_cache, *d_v_cache;
     uint32_t row_stride;
     ds4_fp8_kv_cache_get_fp8_ptrs(kv_cache, layer_idx, &d_k_cache, &d_v_cache, &row_stride);
 

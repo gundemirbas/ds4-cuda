@@ -13293,7 +13293,7 @@ extern "C" void launch_gemv_nvfp4(const float *x, const uint8_t *w, const uint8_
                              float *y, int M, int K, float ws2);
 extern "C" void launch_gemv_f8e4m3(const float *x, const uint8_t *w, float *y, int M, int K);
 extern "C" void launch_rms_norm(const float *x, float *out, const float *weight,
-                           int n, float eps);
+                           int rows, int n, float eps);
 extern "C" void launch_rope(float *q, float *k, int n_heads, int head_dim,
                        int pos, float freq_base);
 
@@ -13397,13 +13397,6 @@ int ds4_gpu_kv_fp8_quantize_append_tensor(
     (void)head_dim;
     (void)n_rot;
     return 1;
-}
-    uint32_t                raw_cap,
-    uint32_t                row,
-    uint32_t                head_dim,
-    uint32_t                n_rot) {
-    /* TODO: Implement FP8 KV cache append on GPU */
-    return 0;
 }
 
 
