@@ -162,8 +162,8 @@ void ds4_layer_forward(
     /* For now, use a simple GQA attention */
     /* TODO: implement proper flash attention with FP8 tensor cores */
     int seq_len = pos + 1;
-    launch_fp8_attention(q, d_k_cache, d_v_cache, scores, tmp_out,
-                        NH, HD, seq_len, 1, pos);
+    launch_fp8_attention(q, (const uint8_t*)d_k_cache, (const uint8_t*)d_v_cache,
+                        scores, tmp_out, NH, HD, seq_len, 1, pos);
 
     /* ---- 7. Output projection: wo_a (grouped F8) then wo_b (F8) ---- */
     launch_gemv_grouped_f8e4m3(tmp_out, w->wo_a, expert_buf, O_GROUPS, H, O_LORA);

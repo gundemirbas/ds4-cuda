@@ -13804,7 +13804,7 @@ __global__ void topk_256_kernel(const float *scores, int *indices, int k) {
     }
 }
 
-void launch_topk_256void launch_topk_256(const float *scores, int *indices, int k) {
+void launch_topk_256(const float *scores, int *indices, int k) {
     topk_256_kernel<<<1, 256>>>(scores, indices, k);
 }
 
