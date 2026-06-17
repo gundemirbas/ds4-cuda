@@ -2118,7 +2118,7 @@ static void model_summary(const ds4_model *m) {
     model_get_u32(m, "deepseek4.expert_group_count", &n_expert_groups);
     model_get_u32(m, "deepseek4.expert_group_used_count", &n_group_used);
 
-    for (uint64_t i = 0; i < m->n_tensors; i++) {
+    for (uint64_t i = 0; m->tensors && i < m->n_tensors; i++) {
         tensor_bytes += m->tensors[i].bytes;
         params += m->tensors[i].elements;
     }
