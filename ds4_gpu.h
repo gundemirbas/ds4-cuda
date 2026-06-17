@@ -1017,6 +1017,56 @@ int ds4_gpu_matmul_q8_0_hc_expand_tensor(
         uint32_t                n_embd,
         uint32_t                n_hc);
 
+/* =========================================================================
+ * NVFP4/FP8 Operations (ds4-cuda)
+ * ========================================================================= */
+
+/* NVFP4 GEMV */
+int ds4_gpu_matmul_nvfp4_tensor(
+    ds4_gpu_tensor       *out,
+    const void             *model_map,
+    uint64_t                model_size,
+    uint64_t                weight_offset,
+    uint64_t                in_dim,
+    uint64_t                out_dim,
+    const ds4_gpu_tensor *x,
+    uint64_t                n_tok);
+
+/* FP8 E4M3 GEMV */
+int ds4_gpu_matmul_f8e4m3_tensor(
+    ds4_gpu_tensor       *out,
+    const void             *model_map,
+    uint64_t                model_size,
+    uint64_t                weight_offset,
+    uint64_t                in_dim,
+    uint64_t                out_dim,
+    const ds4_gpu_tensor *x,
+    uint64_t                n_tok);
+
+/* FP8 attention */
+int ds4_gpu_attention_fp8_heads_tensor(
+    ds4_gpu_tensor       *heads,
+    const void             *model_map,
+    uint64_t                model_size,
+    uint64_t                sinks_offset,
+    const ds4_gpu_tensor *q,
+    const uint8_t         *k_fp8_cache,
+    const uint8_t         *v_fp8_cache,
+    uint32_t                n_raw,
+    uint32_t                raw_cap,
+    uint32_t                raw_start,
+    uint32_t                n_head,
+    uint32_t                head_dim);
+
+/* FP8 KV cache quantize + append */
+int ds4_gpu_kv_fp8_quantize_append_tensor(
+    ds4_gpu_tensor       *kv,
+    ds4_gpu_tensor       *raw_cache,
+    uint32_t                raw_cap,
+    uint32_t                row,
+    uint32_t                head_dim,
+    uint32_t                n_rot);
+
 #ifdef __cplusplus
 }
 #endif
