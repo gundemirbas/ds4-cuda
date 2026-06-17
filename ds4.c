@@ -22388,6 +22388,8 @@ static bool vocab_load_safetensors(ds4_vocab *vocab, const char *model_dir) {
     memcpy(path, model_dir, dir_len);
     memcpy(path + dir_len, "/tokenizer.json", 15);
     
+    fprintf(stderr, "ds4: loading safetensors tokenizer from %s\n", path);
+    
     /* Open and parse tokenizer.json */
     FILE *fp = fopen(path, "rb");
     if (!fp) { free(path); return false; }
@@ -22405,16 +22407,17 @@ static bool vocab_load_safetensors(ds4_vocab *vocab, const char *model_dir) {
     /* Parse JSON manually to extract vocab and merges */
     /* Find "model" object first, then look for "vocab" and "merges" inside it */
     char *model_start = strstr(json, "\"model\"");
-    if (!model_start) { free(json); free(path); return false; }
+    if (!model_start) { fprintf(stderr, "ds4: safetensors tokenizer: 'model' key not found\n"); free(json); free(path); return false; }
     
     /* Find the opening brace of the model object */
     char *model_obj = strchr(model_start, '{');
-    if (!model_obj) { free(json); free(path); return false; }
+    if (!model_obj) { fprintf(stderr, "ds4: safetensors tokenizer: model object brace not found\n"); free(json); free(path); return false; }
     
     /* Find "vocab" and "merges" inside the model object */
     char *vocab_start = strstr(model_obj, "\"vocab\"");
     char *merges_start = strstr(model_obj, "\"merges\"");
-    if (!vocab_start || !merges_start) { free(json); free(path); return false; }
+    if (!vocab_start) { fprintf(stderr, "ds4: safetensors tokenizer: 'vocab' key not found\n"); free(json); free(path); return false; }
+    if (!merges_start) { fprintf(stderr, "ds4: safetensors tokenizer: 'merges' key not found\n"); free(json); free(path); return false; }
     
     /* Count vocab entries by finding the {...} object after "vocab" */
     char *vocab_brace = strchr(vocab_start, '{');
