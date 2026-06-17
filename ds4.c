@@ -25977,13 +25977,15 @@ int ds4_engine_open(ds4_engine **out, const ds4_engine_options *opt) {
                     ds4_backend_name(e->backend));
         }
     }
-    weights_bind(&e->weights,
-                 &e->model,
-                 load_slice,
-                 load_layer_start,
-                 load_layer_end,
-                 load_output,
-                 load_output_optional);
+    if (!opt->inspect_only || !is_safetensors_model(opt->model_path)) {
+        weights_bind(&e->weights,
+                     &e->model,
+                     load_slice,
+                     load_layer_start,
+                     load_layer_end,
+                     load_output,
+                     load_output_optional);
+    }
     if (e->ssd_streaming && e->ssd_streaming_cache_bytes != 0) {
         const uint64_t requested_cache_bytes = e->ssd_streaming_cache_bytes;
         const uint64_t safe_cache_bytes =
