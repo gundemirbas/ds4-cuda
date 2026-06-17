@@ -22403,32 +22403,33 @@ static bool vocab_load_safetensors(ds4_vocab *vocab, const char *model_dir) {
     fclose(fp);
     
     /* Parse JSON manually to extract vocab and merges */
-    /* Find "vocab" object and "merges" array */
-    char *vocab_start = strstr(json, "\"vocab\"");
-    char *merges_start = strstr(json, "\"merges\"");
+    /* Find "model" object first, then look for "vocab" and "merges" inside it */
+    char *model_start = strstr(json, "\"model\"");
+    if (!model_start) { free(json); free(path); return false; }
+    
+    /* Find the opening brace of the model object */
+    char *model_obj = strchr(model_start, '{');
+    if (!model_obj) { free(json); free(path); return false; }
+    
+    /* Find "vocab" and "merges" inside the model object */
+    char *vocab_start = strstr(model_obj, "\"vocab\"");
+    char *merges_start = strstr(model_obj, "\"merges\"");
     if (!vocab_start || !merges_start) { free(json); free(path); return false; }
     
-    /* Count vocab entries (between { and }) */
-    int n_vocab = 0;
-    char *p = vocab_start;
-    while (*p && p < json + nread) {
-        if (*p == '{') n_vocab++;
-        if (*p == '}') { n_vocab--; if (n_vocab == 0) break; }
-        p++;
-    }
-    n_vocab = 0; /* reset for actual counting */
+    /* Count vocab entries by finding the {...} object after "vocab" */
+    char *vocab_brace = strchr(vocab_start, '{');
+    if (!vocab_brace) { free(json); free(path); return false; }
     
-    /* Simple approach: just count commas between vocab entries */
-    p = vocab_start;
-    int depth = 0;
-    int commas = 0;
-    while (*p && p < json + nread) {
+    int n_vocab = 0;
+    int depth = 1;
+    char *p = vocab_brace + 1;
+    while (*p && depth > 0) {
         if (*p == '{') depth++;
         else if (*p == '}') depth--;
-        else if (*p == ',' && depth == 1) commas++;
+        else if (*p == ',' && depth == 1) n_vocab++;
         p++;
     }
-    n_vocab = commas + 1; /* number of key-value pairs */
+    n_vocab++; /* last entry */
     
     /* Allocate vocab */
     vocab->n_vocab = n_vocab > 0 ? n_vocab : 128000;
