@@ -231,6 +231,18 @@ int ds4_gpu_matmul_q8_0_tensor(
         const ds4_gpu_tensor *x,
         uint64_t                n_tok);
 
+/* Weight-type-aware matmul dispatch — selects NVFP4/FP8/Q8_0 */
+int ds4_gpu_matmul_tensor(
+        ds4_gpu_tensor       *out,
+        const void             *model_map,
+        uint64_t                model_size,
+        uint64_t                weight_offset,
+        uint64_t                in_dim,
+        uint64_t                out_dim,
+        const ds4_gpu_tensor *x,
+        uint64_t                n_tok,
+        int                     weight_type);
+
 /* Optional fused GPU operations.
  *
  * These are acceleration hooks, not required backend primitives.  A backend

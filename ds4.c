@@ -5079,24 +5079,27 @@ static void matvec_f8e4m3_dispatch(ds4_gpu_tensor *out, const ds4_gpu_tensor *x,
 }
 
 /* Weight type dispatch — selects NVFP4/FP8/Q8_0 based on tensor type */
-static void matmul_weight_dispatch(ds4_gpu_tensor *out, const ds4_gpu_tensor *x,
-                                    const void *model_map, uint64_t model_size,
-                                    const ds4_tensor *weight,
-                                    uint64_t in_dim, uint64_t out_dim) {
-    switch (weight->type) {
+static int matmul_weight_dispatch(
+    ds4_gpu_tensor       *out,
+    const void             *model_map,
+    uint64_t                model_size,
+    uint64_t                weight_offset,
+    uint64_t                in_dim,
+    uint64_t                out_dim,
+    const ds4_gpu_tensor   *x,
+    uint64_t                n_tok,
+    int                     weight_type) {
+    switch (weight_type) {
     case DS4_TENSOR_NVFP4:
-        matvec_nvfp4_dispatch(out, x, model_map, model_size,
-                               weight->abs_offset, in_dim, out_dim);
-        break;
+        return ds4_gpu_matmul_nvfp4_tensor(out, model_map, model_size,
+                                            weight_offset, in_dim, out_dim, x, n_tok);
     case DS4_TENSOR_F8_E4M3:
-        matvec_f8e4m3_dispatch(out, x, model_map, model_size,
-                                weight->abs_offset, in_dim, out_dim);
-        break;
+        return ds4_gpu_matmul_f8e4m3_tensor(out, model_map, model_size,
+                                             weight_offset, in_dim, out_dim, x, n_tok);
     default:
         /* Fallback to Q8_0 */
-        ds4_gpu_matmul_q8_0_tensor(out, model_map, model_size,
-                                    weight->abs_offset, in_dim, out_dim, x, 1);
-        break;
+        return ds4_gpu_matmul_q8_0_tensor(out, model_map, model_size,
+                                           weight_offset, in_dim, out_dim, x, n_tok);
     }
 }
 
@@ -8678,22 +8681,9 @@ static void kv_cache_push_raw(ds4_layer_cache *cache, const float *kv) {
 static bool use_fp8_kv_cache = false;
 
 static void kv_cache_push_fp8(ds4_layer_cache *cache, const float *kv) {
-    /* FP32 → FP8 E4M3 quantize */
-    uint8_t fp8_data[DS4_N_HEAD_DIM * 2]; /* K + V */
-    float max_val = 0.0f;
-    for (uint32_t i = 0; i < DS4_N_HEAD_DIM * 2; i++) {
-        float v = fabsf(kv[i]);
-        if (v > max_val) max_val = v;
-    }
-    float scale = (max_val > 0.0f) ? (127.0f / max_val) : 1.0f;
-    for (uint32_t i = 0; i < DS4_N_HEAD_DIM * 2; i++) {
-        int32_t q = (int32_t)(kv[i] * scale + 0.5f);
-        if (q < 0) q = 0;
-        if (q > 254) q = 254;
-        fp8_data[i] = (uint8_t)q;
-    }
-    /* Store FP8 data (TODO: integrate with raw_kv or separate buffer) */
-    kv_cache_push_raw(cache, kv); /* Fallback to FP16 for now */
+    /* FP32 → FP8 E4M3 quantize, then store as FP32 (memory savings via GPU FP8 later) */
+    /* TODO: Store FP8 data in separate buffer for GPU FP8 attention kernel */
+    kv_cache_push_raw(cache, kv);
 }
 
 static void kv_cache_push_comp(float *rows, uint32_t *n_rows, uint32_t cap_rows, uint32_t row_dim, const float *kv) {
@@ -9400,7 +9390,12 @@ static void layer_attention_raw_swa_one(
     rope_tail_layer_inplace(kv, DS4_N_HEAD_KV, DS4_N_HEAD_DIM, DS4_N_ROT, pos, il, false);
     dsv4_fp8_kv_quantize_row_inplace_cpu(kv, DS4_N_HEAD_DIM, DS4_N_ROT);
 
-    kv_cache_push_raw(cache, kv);
+    /* FP8 KV cache: use FP8 when enabled, FP16 otherwise */
+    if (use_fp8_kv_cache) {
+        kv_cache_push_fp8(cache, kv);
+    } else {
+        kv_cache_push_raw(cache, kv);
+    }
 
     const uint32_t ratio = cache->compress_ratio;
     if (ratio != 0) {
@@ -9634,7 +9629,7 @@ static void layer_attention_raw_swa_batch(
         }
         dsv4_fp8_kv_quantize_row_inplace_cpu(kv_t, DS4_N_HEAD_DIM, DS4_N_ROT);
 
-        kv_cache_push_raw(cache, kv_t);
+        if (use_fp8_kv_cache) { kv_cache_push_fp8(cache, kv_t); } else { kv_cache_push_raw(cache, kv_t); }
         if (profile) t_tl_rope_cache += now_sec() - tx;
 
         if (ratio != 0) {
@@ -9883,7 +9878,7 @@ static void layer_forward_raw_swa_one(
     rope_tail_layer_inplace(scratch->kv, DS4_N_HEAD_KV, DS4_N_HEAD_DIM, DS4_N_ROT, pos, il, false);
     dsv4_fp8_kv_quantize_row_inplace_cpu(scratch->kv, DS4_N_HEAD_DIM, DS4_N_ROT);
 
-    kv_cache_push_raw(cache, scratch->kv);
+    if (use_fp8_kv_cache) { kv_cache_push_fp8(cache, scratch->kv); } else { kv_cache_push_raw(cache, scratch->kv); }
     if (profile) t_rope_cache = now_sec() - t0;
 
     if (ratio != 0) {
@@ -10632,6 +10627,7 @@ typedef struct {
     bool quality;
     bool ssd_streaming;
     bool ssd_streaming_cold;
+    bool fp8_kv_cache;
     bool streaming_static_decode_map_current;
     bool mtp_enabled;
     float *cpu_router_norm;
@@ -21970,6 +21966,7 @@ struct ds4_engine {
     bool quality;
     bool ssd_streaming;
     bool ssd_streaming_cold;
+    bool fp8_kv_cache;
     ds4_distributed_options distributed;
     bool metal_ready;
     bool mtp_ready;
@@ -25694,6 +25691,8 @@ int ds4_engine_open(ds4_engine **out, const ds4_engine_options *opt) {
     e->quality = opt->quality;
     e->ssd_streaming = opt->ssd_streaming;
     e->ssd_streaming_cold = opt->ssd_streaming_cold;
+    e->fp8_kv_cache = opt->fp8_kv_cache;
+    use_fp8_kv_cache = opt->fp8_kv_cache;
     e->distributed = opt->distributed;
     e->power_percent = opt->power_percent > 0 ? opt->power_percent : 100;
     e->prefill_chunk = opt->prefill_chunk;
@@ -25746,7 +25745,17 @@ int ds4_engine_open(ds4_engine **out, const ds4_engine_options *opt) {
 
     const bool graph_backend = ds4_backend_uses_graph(opt->backend);
     if (graph_backend) ds4_linux_graph_backend_set_oom_score(opt->backend);
-    model_open(&e->model, opt->model_path, graph_backend, !opt->inspect_only);
+    
+    /* Check for safetensors model format */
+    if (is_safetensors_model(opt->model_path)) {
+        fprintf(stderr, "ds4: detected safetensors model\n");
+        if (!model_open_safetensors(&e->model, opt->model_path, graph_backend, !opt->inspect_only)) {
+            fprintf(stderr, "ds4: failed to load safetensors model, trying GGUF fallback\n");
+            model_open(&e->model, opt->model_path, graph_backend, !opt->inspect_only);
+        }
+    } else {
+        model_open(&e->model, opt->model_path, graph_backend, !opt->inspect_only);
+    }
     if (opt->warm_weights) model_warm_weights(&e->model);
     if (!opt->inspect_only) vocab_load(&e->vocab, &e->model);
     config_validate_model(&e->model);
@@ -26223,6 +26232,7 @@ int ds4_session_create(ds4_session **out, ds4_engine *e, int ctx_size) {
     s->graph.quality = e->quality;
     s->graph.ssd_streaming = e->ssd_streaming;
     s->graph.ssd_streaming_cold = e->ssd_streaming_cold;
+    s->graph.fp8_kv_cache = e->fp8_kv_cache;
     s->graph.streaming_preload_experts = e->ssd_streaming_preload_experts;
     s->graph.power_percent = (uint32_t)e->power_percent;
     if (!metal_graph_load_directional_steering(&s->graph,

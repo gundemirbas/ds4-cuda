@@ -13256,6 +13256,33 @@ extern "C" int ds4_gpu_matmul_q8_0_hc_expand_tensor(
 }
 
 /* =========================================================================
+ * Weight-type-aware matmul dispatch
+ * ========================================================================= */
+
+extern "C" int ds4_gpu_matmul_tensor(
+        ds4_gpu_tensor       *out,
+        const void             *model_map,
+        uint64_t                model_size,
+        uint64_t                weight_offset,
+        uint64_t                in_dim,
+        uint64_t                out_dim,
+        const ds4_gpu_tensor *x,
+        uint64_t                n_tok,
+        int                     weight_type) {
+    switch (weight_type) {
+    case 31: /* DS4_TENSOR_NVFP4 */
+        return ds4_gpu_matmul_nvfp4_tensor(out, model_map, model_size,
+                                            weight_offset, in_dim, out_dim, x, n_tok);
+    case 30: /* DS4_TENSOR_F8_E4M3 */
+        return ds4_gpu_matmul_f8e4m3_tensor(out, model_map, model_size,
+                                             weight_offset, in_dim, out_dim, x, n_tok);
+    default:
+        return ds4_gpu_matmul_q8_0_tensor(out, model_map, model_size,
+                                           weight_offset, in_dim, out_dim, x, n_tok);
+    }
+}
+
+/* =========================================================================
  * NVFP4/FP8 Kernel Wrappers (ds4-cuda)
  * ========================================================================= */
 

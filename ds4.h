@@ -112,6 +112,7 @@ typedef struct {
     bool quality;
     bool ssd_streaming;
     bool ssd_streaming_cold;
+    bool fp8_kv_cache;
     bool inspect_only;
     bool load_slice;
     uint32_t load_layer_start;
