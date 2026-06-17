@@ -22380,7 +22380,7 @@ static int vocab_lookup(const ds4_vocab *vocab, const char *text) {
 
 /* Load token strings, special token ids, and merge ranks from GGUF metadata. */
 /* Safetensors tokenizer loader — reads tokenizer.json and populates ds4_vocab */
-static bool vocab_load_safetensors(ds4_vocab *vocab, const char *model_dir) {
+static bool __attribute__((noinline)) vocab_load_safetensors(ds4_vocab *vocab, const char *model_dir) {
     /* Build path to tokenizer.json */
     size_t dir_len = strlen(model_dir);
     char *path = malloc(dir_len + 20);
