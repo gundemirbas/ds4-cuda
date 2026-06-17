@@ -393,10 +393,10 @@ float sst_nvfp4_scale_to_float(uint8_t scale);
 float sst_fp8_e4m3_to_float(uint8_t value);
 
 /* =========================================================================
- * FP8 KV Cache types (merged from ds4_kv_cache.h)
+ * FP8 KV Cache types (merged from ds4_fp8_kv_cache.h)
  * ========================================================================= */
 
-typedef struct ds4_kv_cache ds4_kv_cache;
+typedef struct ds4_fp8_kv_cache ds4_fp8_kv_cache;
 
 static inline float ds4_f8e4m3_to_f32(uint8_t v) {
     if (!v) return 0.0f;
@@ -422,22 +422,22 @@ static inline uint8_t ds4_f32_to_f8e4m3(float f) {
     return (uint8_t)(sign << 7) | ((uint8_t)exp << 3) | (uint8_t)(mantissa & 7);
 }
 
-ds4_kv_cache *ds4_kv_cache_create(uint32_t max_seq_len, uint32_t n_layers,
+ds4_fp8_kv_cache *ds4_fp8_kv_cache_create(uint32_t max_seq_len, uint32_t n_layers,
                                  uint32_t n_kv_heads, uint32_t head_dim);
-void ds4_kv_cache_free(ds4_kv_cache *cache);
-void ds4_kv_cache_reset(ds4_kv_cache *cache);
-void ds4_kv_cache_set_fp8(
-    ds4_kv_cache *cache, uint32_t layer, uint32_t pos,
+void ds4_fp8_kv_cache_free(ds4_fp8_kv_cache *cache);
+void ds4_fp8_kv_cache_reset(ds4_fp8_kv_cache *cache);
+void ds4_fp8_kv_cache_set_fp8(
+    ds4_fp8_kv_cache *cache, uint32_t layer, uint32_t pos,
     const uint8_t *d_k, const uint8_t *d_v);
-void ds4_kv_cache_append(
-    ds4_kv_cache *cache, uint32_t layer, uint32_t pos,
+void ds4_fp8_kv_cache_append(
+    ds4_fp8_kv_cache *cache, uint32_t layer, uint32_t pos,
     const float *d_k, const float *d_v);
-void ds4_kv_cache_get_fp8_ptrs(
-    ds4_kv_cache *cache, uint32_t layer,
+void ds4_fp8_kv_cache_get_fp8_ptrs(
+    ds4_fp8_kv_cache *cache, uint32_t layer,
     void **d_k_ptr, void **d_v_ptr, uint32_t *row_stride);
-uint32_t ds4_kv_cache_len(const ds4_kv_cache *cache);
-uint64_t ds4_kv_cache_memory_bytes(const ds4_kv_cache *cache);
-void ds4_kv_cache_stats(const ds4_kv_cache *cache, FILE *fp);
+uint32_t ds4_fp8_kv_cache_len(const ds4_fp8_kv_cache *cache);
+uint64_t ds4_fp8_kv_cache_memory_bytes(const ds4_fp8_kv_cache *cache);
+void ds4_fp8_kv_cache_stats(const ds4_fp8_kv_cache *cache, FILE *fp);
 
 /* =========================================================================
  * SSD Streaming Expert Cache types (merged from ds4_ssd_streaming.h)

@@ -17,7 +17,7 @@
 #define DS4_LAYER_FORWARD_CUH
 
 #include <cuda_runtime.h>
-/* ds4_kv_cache.h types are now in ds4.h */
+/* ds4_fp8_kv_cache.h types are now in ds4.h */
 
 /* Forward declarations of existing kernels */
 extern "C" {
@@ -97,7 +97,7 @@ typedef struct {
  */
 void ds4_layer_forward(
     const ds4_layer_weights *w,
-    ds4_kv_cache *kv_cache,
+    ds4_fp8_kv_cache *kv_cache,
     uint32_t layer_idx,
     float *d_in,
     float *d_out,
@@ -151,13 +151,13 @@ void ds4_layer_forward(
     launch_rope(q, k, NH, HD, pos, freq_base);
 
     /* ---- 5. Append to KV cache ---- */
-    ds4_kv_cache_append(kv_cache, layer_idx, pos, k, /* v is part of k for MLA */
+    ds4_fp8_kv_cache_append(kv_cache, layer_idx, pos, k, /* v is part of k for MLA */
                         k + KVD/2);  /* TODO: proper V separation */
 
     /* ---- 6. Attention ---- */
     uint8_t *d_k_cache, *d_v_cache;
     uint32_t row_stride;
-    ds4_kv_cache_get_fp8_ptrs(kv_cache, layer_idx, &d_k_cache, &d_v_cache, &row_stride);
+    ds4_fp8_kv_cache_get_fp8_ptrs(kv_cache, layer_idx, &d_k_cache, &d_v_cache, &row_stride);
 
     /* For now, use a simple GQA attention */
     /* TODO: implement proper flash attention with FP8 tensor cores */
