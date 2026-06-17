@@ -13456,7 +13456,7 @@ struct ds4_fp8_kv_cache {
  * GPU Management Functions
  * ======================================================================== */
 
-extern "C" ds4_fp8_kv_cache *ds4_fp8_kv_cache_alloc_gpu(ds4_fp8_kv_cache *cache) {
+ds4_fp8_kv_cache *ds4_fp8_kv_cache_alloc_gpu(ds4_fp8_kv_cache *cache) {
     if (!cache) return NULL;
 
     uint64_t row = (uint64_t)cache->n_kv_heads * cache->head_dim;
@@ -13478,13 +13478,13 @@ extern "C" ds4_fp8_kv_cache *ds4_fp8_kv_cache_alloc_gpu(ds4_fp8_kv_cache *cache)
     return cache;
 }
 
-extern "C" void ds4_fp8_kv_cache_free_gpu(ds4_fp8_kv_cache *cache) {
+void ds4_fp8_kv_cache_free_gpu(ds4_fp8_kv_cache *cache) {
     if (!cache) return;
     if (cache->d_k_cache) cudaFree(cache->d_k_cache);
     if (cache->d_v_cache) cudaFree(cache->d_v_cache);
 }
 
-extern "C" void ds4_fp8_kv_cache_reset_gpu(ds4_fp8_kv_cache *cache) {
+void ds4_fp8_kv_cache_reset_gpu(ds4_fp8_kv_cache *cache) {
     if (!cache) return;
     uint64_t row = (uint64_t)cache->n_kv_heads * cache->head_dim;
     uint64_t layer = (uint64_t)cache->n_ctx * row;
@@ -13492,7 +13492,7 @@ extern "C" void ds4_fp8_kv_cache_reset_gpu(ds4_fp8_kv_cache *cache) {
     cudaMemset(cache->d_v_cache, 0, layer * cache->n_layers);
 }
 
-extern "C" void ds4_fp8_kv_cache_append_gpu(
+void ds4_fp8_kv_cache_append_gpu(
     ds4_fp8_kv_cache *cache, uint32_t layer, uint32_t pos,
     const float *d_k, const float *d_v)
 {
@@ -13511,7 +13511,7 @@ extern "C" void ds4_fp8_kv_cache_append_gpu(
         d_v, cache->d_v_cache + layer_off + row_off, (int)row);
 }
 
-extern "C" void ds4_fp8_kv_cache_get_ptrs_gpu(
+void ds4_fp8_kv_cache_get_ptrs_gpu(
     ds4_fp8_kv_cache *cache, uint32_t layer,
     void **d_k, void **d_v, uint32_t *stride)
 {
