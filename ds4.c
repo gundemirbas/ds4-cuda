@@ -1729,6 +1729,7 @@ static ds4_cursor cursor_at(const ds4_model *m, uint64_t pos) {
 }
 
 static ds4_kv *model_find_kv(const ds4_model *m, const char *key) {
+    if (!m->kv) return NULL;
     for (uint64_t i = 0; i < m->n_kv; i++) {
         if (ds4_streq(m->kv[i].key, key)) return &m->kv[i];
     }
