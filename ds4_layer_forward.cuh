@@ -17,7 +17,7 @@
 #define DS4_LAYER_FORWARD_CUH
 
 #include <cuda_runtime.h>
-#include "ds4_kv_cache.h"
+/* ds4_kv_cache.h types are now in ds4.h */
 
 /* Forward declarations of existing kernels */
 extern "C" {

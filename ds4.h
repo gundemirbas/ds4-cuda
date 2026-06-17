@@ -333,4 +333,143 @@ int ds4_session_load_layer_payload(ds4_session *s, FILE *fp,
                                    uint32_t layer_start, uint32_t layer_end,
                                    char *err, size_t errlen);
 
+
+/* =========================================================================
+ * Safetensors types (merged from ds4_safetensors.h)
+ * ========================================================================= */
+
+typedef enum {
+    SST_DTYPE_F32,
+    SST_DTYPE_F16,
+    SST_DTYPE_BF16,
+    SST_DTYPE_F8_E4M3,
+    SST_DTYPE_NVFP4,
+    SST_DTYPE_MXFP4,
+    SST_DTYPE_UNKNOWN,
+} sst_dtype;
+
+typedef struct {
+    char *name;
+    sst_dtype dtype;
+    uint64_t ndim;
+    uint64_t shape[8];
+    uint64_t data_offset;
+    uint64_t data_size;
+} sst_tensor;
+
+typedef struct {
+    int fd;
+    uint8_t *map;
+    uint64_t file_size;
+    uint64_t header_size;
+    uint64_t data_offset;
+    uint64_t data_size;
+    uint64_t n_tensors;
+    sst_tensor *tensors;
+    void *index;
+    char *name;
+} sst_model;
+
+typedef struct {
+    sst_model **models;
+    uint64_t n_models;
+    void *global_index;
+} sst_sharded_model;
+
+sst_model *sst_model_load(const char *path);
+void sst_model_free(sst_model *model);
+sst_tensor *sst_model_find_tensor(sst_model *model, const char *name);
+void *sst_model_tensor_data(sst_model *model, sst_tensor *tensor);
+sst_sharded_model *sst_sharded_model_load(const char *dir_path);
+void sst_sharded_model_free(sst_sharded_model *model);
+sst_tensor *sst_sharded_model_find_tensor(sst_sharded_model *model, const char *name);
+uint64_t sst_tensor_elements(const sst_tensor *tensor);
+uint64_t sst_tensor_bytes(const sst_tensor *tensor);
+void *sst_sharded_model_tensor_data(sst_sharded_model *model, sst_tensor *tensor);
+size_t sst_dtype_size(sst_dtype dtype);
+uint32_t sst_dtype_block_size(sst_dtype dtype);
+uint32_t sst_dtype_bits(sst_dtype dtype);
+float sst_nvfp4_scale_to_float(uint8_t scale);
+float sst_fp8_e4m3_to_float(uint8_t value);
+
+/* =========================================================================
+ * FP8 KV Cache types (merged from ds4_kv_cache.h)
+ * ========================================================================= */
+
+typedef struct ds4_kv_cache ds4_kv_cache;
+
+static inline float ds4_f8e4m3_to_f32(uint8_t v) {
+    if (!v) return 0.0f;
+    unsigned s = (v >> 7) & 1;
+    unsigned e = (v >> 3) & 0xF;
+    unsigned m = v & 0x7;
+    float val = (e == 0) ? (float)m / 64.0f
+                         : (float)(m + 8) / 8.0f * ldexpf(1.0f, (int)e - 7);
+    return s ? -val : val;
+}
+
+static inline uint8_t ds4_f32_to_f8e4m3(float f) {
+    if (f == 0.0f) return 0;
+    unsigned sign = f < 0 ? 1 : 0;
+    f = fabsf(f);
+    int mantissa, exp;
+    mantissa = (int)(f * 8.0f);
+    exp = 0;
+    while (mantissa >= 16) { mantissa >>= 1; exp++; }
+    while (mantissa < 8 && exp > 0) { mantissa <<= 1; exp--; }
+    if (exp > 15) return sign ? 0x80 | 0xF : 0xF;
+    if (exp < 0) return 0;
+    return (uint8_t)(sign << 7) | ((uint8_t)exp << 3) | (uint8_t)(mantissa & 7);
+}
+
+ds4_kv_cache *ds4_kv_cache_create(uint32_t max_seq_len, uint32_t n_layers,
+                                 uint32_t n_kv_heads, uint32_t head_dim);
+void ds4_kv_cache_free(ds4_kv_cache *cache);
+void ds4_kv_cache_reset(ds4_kv_cache *cache);
+void ds4_kv_cache_set_fp8(
+    ds4_kv_cache *cache, uint32_t layer, uint32_t pos,
+    const uint8_t *d_k, const uint8_t *d_v);
+void ds4_kv_cache_append(
+    ds4_kv_cache *cache, uint32_t layer, uint32_t pos,
+    const float *d_k, const float *d_v);
+void ds4_kv_cache_get_fp8_ptrs(
+    ds4_kv_cache *cache, uint32_t layer,
+    void **d_k_ptr, void **d_v_ptr, uint32_t *row_stride);
+uint32_t ds4_kv_cache_len(const ds4_kv_cache *cache);
+uint64_t ds4_kv_cache_memory_bytes(const ds4_kv_cache *cache);
+void ds4_kv_cache_stats(const ds4_kv_cache *cache, FILE *fp);
+
+/* =========================================================================
+ * SSD Streaming Expert Cache types (merged from ds4_ssd_streaming.h)
+ * ========================================================================= */
+
+typedef struct {
+    uint32_t layer_idx;
+    uint32_t expert_idx;
+    uint64_t last_access;
+    uint32_t access_count;
+    bool is_hot;
+    void *weight_gate;
+    void *weight_up;
+    void *weight_down;
+    uint64_t weight_size;
+    bool is_loaded;
+} ssd_expert_entry;
+
+typedef struct {
+    ssd_expert_entry *entries;
+    uint32_t capacity;
+    uint32_t count;
+    uint64_t total_bytes;
+    uint64_t max_bytes;
+    uint64_t hit_count;
+    uint64_t miss_count;
+} ssd_expert_cache;
+
+ssd_expert_cache *ssd_expert_cache_create(uint32_t capacity, uint64_t max_bytes);
+void ssd_expert_cache_free(ssd_expert_cache *cache);
+ssd_expert_entry *ssd_expert_cache_get(ssd_expert_cache *cache, uint32_t layer, uint32_t expert);
+int ssd_expert_cache_put(ssd_expert_cache *cache, uint32_t layer, uint32_t expert, void *data, uint64_t size);
+void ssd_expert_cache_stats(ssd_expert_cache *cache, uint64_t *hits, uint64_t *misses, double *hit_rate);
+
 #endif /* DS4_H */

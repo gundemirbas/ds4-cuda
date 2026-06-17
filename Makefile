@@ -1,5 +1,8 @@
 # Makefile for ds4-cuda (NVFP4 port of antirez/ds4)
 # Target: DGX Spark (NVIDIA GB10, sm_121a)
+#
+# All source files are merged into ds4.c (CPU) and ds4_cuda.cu (CUDA).
+# Separate files from AGENTS.md have been merged and are no longer compiled.
 
 CC = gcc
 NVCC = nvcc
@@ -19,44 +22,28 @@ all: ds4 ds4-server ds4-bench ds4-eval ds4-agent
 %.o: %.cu
 	$(NVCC) $(NVFLAGS) -I. $< -c -o $@
 
-ds4_kv_cache_cu.o: ds4_kv_cache.cu
-	$(NVCC) $(NVFLAGS) -I. $< -c -o $@
-
-ds4_cuda_forward.o: ds4_cuda_forward.cu
-	$(NVCC) $(NVFLAGS) -I. $< -c -o $@
-
-ds4_cuda_fp8_attention.o: ds4_cuda_fp8_attention.cu
-	$(NVCC) $(NVFLAGS) -I. $< -c -o $@
-
-ds4_cuda_embedding.o: ds4_cuda_embedding.cu
-	$(NVCC) $(NVFLAGS) -I. $< -c -o $@
-
-ds4_cuda_nvfp4_mmq.o: ds4_cuda_nvfp4_mmq.cu
-	$(NVCC) $(NVFLAGS) -I. $< -c -o $@
-
-# Ortak objeler
+# Ortak objeler (merged: ds4_safetensors.c, ds4_kv_cache.c, ds4_model_config.c, ds4_expert_cache.c)
 COMMON = ds4.o ds4_help.o ds4_kvstore.o ds4_ssd.o ds4_distributed.o rax.o linenoise.o
-NEW_C = ds4_safetensors.o ds4_kv_cache.o ds4_model_config.o ds4_expert_cache.o
-CUDA = ds4_cuda.o ds4_kv_cache_cu.o ds4_cuda_forward.o ds4_cuda_fp8_attention.o ds4_cuda_embedding.o ds4_cuda_nvfp4_mmq.o
+CUDA = ds4_cuda.o
 
 # CLI
-ds4: $(COMMON) ds4_cli.o $(NEW_C) $(CUDA)
+ds4: $(COMMON) ds4_cli.o $(CUDA)
 	$(NVCC) $(NVFLAGS) $^ -o $@ $(CUDA_LDLIBS)
 
 # Server
-ds4-server: $(COMMON) ds4_server.o $(NEW_C) $(CUDA)
+ds4-server: $(COMMON) ds4_server.o $(CUDA)
 	$(NVCC) $(NVFLAGS) $^ -o $@ $(CUDA_LDLIBS)
 
 # Benchmark
-ds4-bench: $(COMMON) ds4_bench.o $(NEW_C) $(CUDA)
+ds4-bench: $(COMMON) ds4_bench.o $(CUDA)
 	$(NVCC) $(NVFLAGS) $^ -o $@ $(CUDA_LDLIBS)
 
 # Eval
-ds4-eval: $(COMMON) ds4_eval.o $(NEW_C) $(CUDA)
+ds4-eval: $(COMMON) ds4_eval.o $(CUDA)
 	$(NVCC) $(NVFLAGS) $^ -o $@ $(CUDA_LDLIBS)
 
 # Agent
-ds4-agent: $(COMMON) ds4_agent.o ds4_web.o $(NEW_C) $(CUDA)
+ds4-agent: $(COMMON) ds4_agent.o ds4_web.o $(CUDA)
 	$(NVCC) $(NVFLAGS) $^ -o $@ $(CUDA_LDLIBS)
 
 clean:

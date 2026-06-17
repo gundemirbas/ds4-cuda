@@ -39,7 +39,7 @@
 
 #include "ds4.h"
 #include "ds4_distributed.h"
-#include "ds4_safetensors.h"
+#include "ds4_config.h"
 
 #ifndef DS4_NO_GPU
 #include "ds4_gpu.h"
@@ -28141,3 +28141,987 @@ int ds4_session_ctx(ds4_session *s) {
 int ds4_session_prefill_cap(ds4_session *s) {
     return s ? (int)s->prefill_cap : 0;
 }
+
+
+/* =========================================================================
+ * Model Config Parser (merged: ds4_model_config.c)
+ * ========================================================================= */
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <errno.h>
+#include <ctype.h>
+#include <sys/stat.h>
+
+/* ---- Simple JSON parser ---- */
+
+typedef struct {
+    const char *p;
+    const char *end;
+} json_ctx;
+
+static void json_skip_ws(json_ctx *c) {
+    while (c->p < c->end && (*c->p == ' ' || *c->p == '\t' || *c->p == '\n' || *c->p == '\r'))
+        c->p++;
+}
+
+static int json_expect(json_ctx *c, char expected) {
+    json_skip_ws(c);
+    if (c->p >= c->end || *c->p != expected) return -1;
+    c->p++;
+    return 0;
+}
+
+static char *cfg_json_parse_string(json_ctx *c) {
+    json_skip_ws(c);
+    if (c->p >= c->end || *c->p != '"') return NULL;
+    c->p++;
+    const char *start = c->p;
+    while (c->p < c->end && *c->p != '"') {
+        if (*c->p == '\\') c->p++;
+        c->p++;
+    }
+    if (c->p >= c->end) return NULL;
+    size_t len = c->p - start;
+    char *s = malloc(len + 1);
+    if (!s) return NULL;
+    memcpy(s, start, len);
+    s[len] = '\0';
+    c->p++;
+    return s;
+}
+
+static int64_t json_parse_int(json_ctx *c) {
+    json_skip_ws(c);
+    int sign = 1;
+    if (c->p < c->end && *c->p == '-') { sign = -1; c->p++; }
+    int64_t v = 0;
+    while (c->p < c->end && isdigit(*c->p)) {
+        v = v * 10 + (*c->p - '0');
+        c->p++;
+    }
+    return v * sign;
+}
+
+static void cfg_json_skip_value(json_ctx *c) {
+    json_skip_ws(c);
+    if (c->p >= c->end) return;
+    char ch = *c->p;
+    if (ch == '"') { cfg_json_parse_string(c); return; }
+    if (ch == '{') {
+        c->p++;
+        int depth = 1;
+        while (depth > 0 && c->p < c->end) {
+            ch = *c->p++;
+            if (ch == '{') depth++;
+            else if (ch == '}') depth--;
+        }
+        return;
+    }
+    if (ch == '[') {
+        c->p++;
+        int depth = 1;
+        while (depth > 0 && c->p < c->end) {
+            ch = *c->p++;
+            if (ch == '[') depth++;
+            else if (ch == ']') depth--;
+        }
+        return;
+    }
+    while (c->p < c->end && *c->p != ',' && *c->p != '}' && *c->p != ']' && *c->p != ' ')
+        c->p++;
+}
+
+/* ---- Read file into buffer ---- */
+
+static char *read_file(const char *path, size_t *len) {
+    FILE *fp = fopen(path, "rb");
+    if (!fp) return NULL;
+
+    struct stat st;
+    if (fstat(fileno(fp), &st) == -1 || st.st_size <= 0) {
+        fclose(fp);
+        return NULL;
+    }
+
+    char *buf = malloc((size_t)st.st_size + 1);
+    if (!buf) { fclose(fp); return NULL; }
+
+    size_t nread = fread(buf, 1, (size_t)st.st_size, fp);
+    fclose(fp);
+    buf[nread] = '\0';
+    *len = nread;
+    return buf;
+}
+
+/* ---- Build config.json path ---- */
+
+static char *config_path(const char *model_dir) {
+    size_t dirlen = strlen(model_dir);
+    /* strip trailing slash */
+    while (dirlen > 0 && model_dir[dirlen - 1] == '/') dirlen--;
+    size_t pathlen = dirlen + 12; /* "/config.json\0" */
+    char *path = malloc(pathlen);
+    if (!path) return NULL;
+    memcpy(path, model_dir, dirlen);
+    memcpy(path + dirlen, "/config.json", 12);
+    return path;
+}
+
+/* ---- Parse config.json into ds4_config ---- */
+
+static void set_string(const char **dst, char *val) {
+    if (*dst) free((void*)*dst);
+    *dst = val ? val : NULL;
+}
+
+int ds4_config_load(const char *model_dir, ds4_config *cfg) {
+    memset(cfg, 0, sizeof(*cfg));
+
+    /* Build config.json path */
+    char *path = config_path(model_dir);
+    if (!path) return 0;
+
+    /* Read file */
+    size_t file_len;
+    char *buf = read_file(path, &file_len);
+    free(path);
+    if (!buf) return 0;
+
+    /* Parse JSON */
+    json_ctx ctx;
+    ctx.p = buf;
+    ctx.end = buf + file_len;
+
+    if (json_expect(&ctx, '{') < 0) { free(buf); return 0; }
+
+    /* Defaults */
+    cfg->n_expert_used = 6;
+    cfg->head_dim = 512;
+    cfg->n_kv_heads = 1;
+    cfg->rms_eps = 1.0e-6f;
+    cfg->hc_eps = 1.0e-6f;
+    cfg->swiglu_clamp_exp = 10.0f;
+    cfg->rope_freq_base = 10000.0f;
+    cfg->rope_scale_factor = 16.0f;
+    cfg->rope_yarn_beta_fast = 32.0f;
+    cfg->rope_yarn_beta_slow = 1.0f;
+    cfg->compress_rope_freq_base = 160000.0f;
+    cfg->rope_orig_ctx = 65536;
+    cfg->expert_weight_scale = 1.0f;
+
+    while (ctx.p < ctx.end) {
+        json_skip_ws(&ctx);
+        if (*ctx.p == '}') break;
+        if (*ctx.p == ',') { ctx.p++; continue; }
+
+        char *key = cfg_json_parse_string(&ctx);
+        if (!key) break;
+        json_skip_ws(&ctx);
+        if (ctx.p >= ctx.end || *ctx.p != ':') { free(key); break; }
+        ctx.p++;
+
+        /* Model name */
+        if (strcmp(key, "_name_or_path") == 0 ||
+            strcmp(key, "name") == 0)
+            set_string(&cfg->name, cfg_json_parse_string(&ctx));
+
+        /* Architecture */
+        else if (strcmp(key, "n_layers") == 0 ||
+                 strcmp(key, "num_hidden_layers") == 0)
+            cfg->n_layer = (uint32_t)json_parse_int(&ctx);
+        else if (strcmp(key, "n_heads") == 0 ||
+                 strcmp(key, "num_attention_heads") == 0)
+            cfg->n_head = (uint32_t)json_parse_int(&ctx);
+        else if (strcmp(key, "n_kv_heads") == 0 ||
+                 strcmp(key, "num_key_value_heads") == 0)
+            cfg->n_kv_heads = (uint32_t)json_parse_int(&ctx);
+        else if (strcmp(key, "head_dim") == 0)
+            cfg->head_dim = (uint32_t)json_parse_int(&ctx);
+        else if (strcmp(key, "hidden_size") == 0 ||
+                 strcmp(key, "embedding_length") == 0 ||
+                 strcmp(key, "d_model") == 0)
+            cfg->n_embd = (uint32_t)json_parse_int(&ctx);
+        else if (strcmp(key, "vocab_size") == 0)
+            cfg->n_vocab = (uint32_t)json_parse_int(&ctx);
+        else if (strcmp(key, "n_experts") == 0 ||
+                 strcmp(key, "num_experts") == 0 ||
+                 strcmp(key, "num_experts_per_layer") == 0)
+            cfg->n_expert = (uint32_t)json_parse_int(&ctx);
+        else if (strcmp(key, "n_experts_per_layer") == 0)
+            cfg->n_expert = (uint32_t)json_parse_int(&ctx);
+        else if (strcmp(key, "n_activated_experts") == 0 ||
+                 strcmp(key, "n_activated_experts_per_layer") == 0)
+            cfg->n_expert_used = (uint32_t)json_parse_int(&ctx);
+        else if (strcmp(key, "intermediate_size") == 0 ||
+                 strcmp(key, "ffn_hidden_size") == 0)
+            cfg->n_ff_exp = (uint32_t)json_parse_int(&ctx);
+        else if (strcmp(key, "max_seq_len") == 0 ||
+                 strcmp(key, "max_position_embeddings") == 0)
+            cfg->max_seq_len = (uint64_t)json_parse_int(&ctx);
+        else if (strcmp(key, "rope_freq_base") == 0 ||
+                 strcmp(key, "rope_theta") == 0)
+            cfg->rope_freq_base = (float)json_parse_int(&ctx);
+        else if (strcmp(key, "rope_scaling_factor") == 0 ||
+                 strcmp(key, "rope_factor") == 0)
+            cfg->rope_scale_factor = (float)json_parse_int(&ctx);
+
+        /* DeepSeek-specific */
+        else if (strcmp(key, "num_expert_shared") == 0 ||
+                 strcmp(key, "n_expert_shared") == 0)
+            cfg->n_expert_shared = (uint32_t)json_parse_int(&ctx);
+        else if (strcmp(key, "num_expert_groups") == 0)
+            cfg->n_expert_groups = (uint32_t)json_parse_int(&ctx);
+        else if (strcmp(key, "num_group_used") == 0)
+            cfg->n_group_used = (uint32_t)json_parse_int(&ctx);
+        else if (strcmp(key, "num_hash_layer") == 0 ||
+                 strcmp(key, "n_hash_layer") == 0)
+            cfg->n_hash_layer = (uint32_t)json_parse_int(&ctx);
+        else if (strcmp(key, "sliding_window") == 0)
+            cfg->n_swa = (uint32_t)json_parse_int(&ctx);
+        else if (strcmp(key, "n_indexer_heads") == 0)
+            cfg->n_indexer_heads = (uint32_t)json_parse_int(&ctx);
+        else if (strcmp(key, "n_indexer_head_dim") == 0)
+            cfg->n_indexer_head_dim = (uint32_t)json_parse_int(&ctx);
+        else if (strcmp(key, "n_indexer_top_k") == 0)
+            cfg->n_indexer_top_k = (uint32_t)json_parse_int(&ctx);
+        else if (strcmp(key, "n_lora_q") == 0)
+            cfg->n_lora_q = (uint32_t)json_parse_int(&ctx);
+        else if (strcmp(key, "n_lora_o") == 0)
+            cfg->n_lora_o = (uint32_t)json_parse_int(&ctx);
+        else if (strcmp(key, "expert_weight_scale") == 0)
+            cfg->expert_weight_scale = (float)json_parse_int(&ctx);
+        else if (strcmp(key, "rms_norm_eps") == 0)
+            cfg->rms_eps = (float)json_parse_int(&ctx);
+        else if (strcmp(key, "rope_orig_ctx") == 0)
+            cfg->rope_orig_ctx = (uint64_t)json_parse_int(&ctx);
+
+        cfg_json_skip_value(&ctx);
+        free(key);
+    }
+
+    /* Derived fields */
+    /* n_embd is the canonical field - hidden_size removed */
+    if (cfg->n_swa == 0) cfg->n_swa = cfg->max_seq_len > 0 ? (uint32_t)cfg->max_seq_len : 4096;
+
+    free(buf);
+    return 1;
+}
+
+
+/* =========================================================================
+ * Safetensors Parser (merged: ds4_safetensors.c)
+ * ========================================================================= */
+
+static char json_peek(const char **p, const char *end) {
+    while (*p < end && (**p == ' ' || **p == '\t' || **p == '\n' || **p == '\r'))
+        (*p)++;
+    return (*p < end) ? **p : '\0';
+}
+
+static char json_advance(const char **p, const char *end) {
+    while (*p < end && (**p == ' ' || **p == '\t' || **p == '\n' || **p == '\r'))
+        (*p)++;
+    return (*p < end) ? *((*p)++) : '\0';
+}
+
+static char *json_parse_string(const char **p, const char *end) {
+    if (json_advance(p, end) != '"') return NULL;
+    const char *start = *p;
+    while (*p < end && **p != '"') {
+        if (**p == '\\') (*p)++;
+        if (*p < end) (*p)++;
+    }
+    if (*p >= end) return NULL;
+    size_t len = *p - start;
+    char *str = malloc(len + 1);
+    if (!str) return NULL;
+    memcpy(str, start, len);
+    str[len] = '\0';
+    (*p)++;
+    return str;
+}
+
+static void json_skip_value(const char **p, const char *end) {
+    char c = json_peek(p, end);
+    if (c == '"') {
+        json_parse_string(p, end);
+    } else if (c == '{' || c == '[') {
+        char open = c;
+        char close = (c == '{') ? '}' : ']';
+        (*p)++;
+        int depth = 1;
+        while (depth > 0 && *p < end) {
+            c = *((*p)++);
+            if (c == open) depth++;
+            else if (c == close) depth--;
+        }
+    } else {
+        while (*p < end && **p != ',' && **p != '}' && **p != ']')
+            (*p)++;
+    }
+}
+
+static double json_parse_number(const char **p, const char *end) {
+    while (*p < end && (**p == ' ' || **p == '\t')) (*p)++;
+    const char *start = *p;
+    while (*p < end && (**p == '-' || **p == '.' || **p == 'e' || **p == 'E' || isdigit(**p)))
+        (*p)++;
+    size_t len = *p - start;
+    if (len == 0) return 0;
+    char buf[64];
+    if (len >= sizeof(buf)) len = sizeof(buf) - 1;
+    memcpy(buf, start, len);
+    buf[len] = '\0';
+    return atof(buf);
+}
+
+/* ========================================================================
+ * Dtype helpers
+ * ======================================================================== */
+
+static sst_dtype parse_dtype(const char *s) {
+    if (!s) return SST_DTYPE_UNKNOWN;
+    if (strcmp(s, "F32") == 0 || strcmp(s, "float32") == 0)    return SST_DTYPE_F32;
+    if (strcmp(s, "F16") == 0 || strcmp(s, "float16") == 0)    return SST_DTYPE_F16;
+    if (strcmp(s, "BF16") == 0 || strcmp(s, "bfloat16") == 0)  return SST_DTYPE_BF16;
+    if (strcmp(s, "F8_E4M3") == 0 || strcmp(s, "fp8") == 0)   return SST_DTYPE_F8_E4M3;
+    if (strcmp(s, "NVFP4") == 0 || strcmp(s, "nve4") == 0)    return SST_DTYPE_NVFP4;
+    if (strcmp(s, "MXFP4") == 0 || strcmp(s, "mxfp4") == 0)   return SST_DTYPE_MXFP4;
+    return SST_DTYPE_UNKNOWN;
+}
+
+size_t sst_dtype_size(sst_dtype d) {
+    switch (d) {
+        case SST_DTYPE_F32:      return 4;
+        case SST_DTYPE_F16:      return 2;
+        case SST_DTYPE_BF16:     return 2;
+        case SST_DTYPE_F8_E4M3:  return 1;
+        case SST_DTYPE_NVFP4:    return 1;
+        case SST_DTYPE_MXFP4:    return 1;
+        default:                 return 0;
+    }
+}
+
+uint32_t sst_dtype_block_size(sst_dtype d) {
+    switch (d) {
+        case SST_DTYPE_F32:      return 1;
+        case SST_DTYPE_F16:      return 1;
+        case SST_DTYPE_BF16:     return 1;
+        case SST_DTYPE_F8_E4M3:  return 128;
+        case SST_DTYPE_NVFP4:    return 16;
+        case SST_DTYPE_MXFP4:    return 32;
+        default:                 return 1;
+    }
+}
+
+uint32_t sst_dtype_bits(sst_dtype d) {
+    switch (d) {
+        case SST_DTYPE_F32:      return 32;
+        case SST_DTYPE_F16:      return 16;
+        case SST_DTYPE_BF16:     return 16;
+        case SST_DTYPE_F8_E4M3:  return 8;
+        case SST_DTYPE_NVFP4:    return 4;
+        case SST_DTYPE_MXFP4:    return 4;
+        default:                 return 0;
+    }
+}
+
+/* ========================================================================
+ * Tensor helpers
+ * ======================================================================== */
+
+uint64_t sst_tensor_elements(const sst_tensor *t) {
+    if (!t || t->ndim == 0) return 0;
+    uint64_t n = 1;
+    for (uint64_t i = 0; i < t->ndim; i++) n *= t->shape[i];
+    return n;
+}
+
+uint64_t sst_tensor_bytes(const sst_tensor *t) {
+    return t ? t->data_size : 0;
+}
+
+/* ========================================================================
+ * Model loading
+ * ======================================================================== */
+
+static int parse_one_tensor(const char **p, const char *end, sst_tensor *out) {
+    memset(out, 0, sizeof(*out));
+
+    out->name = json_parse_string(p, end);
+    if (!out->name) return -1;
+    if (json_advance(p, end) != ':') { free(out->name); out->name = NULL; return -1; }
+    if (json_advance(p, end) != '{') { free(out->name); out->name = NULL; return -1; }
+
+    while (*p < end) {
+        char c = json_peek(p, end);
+        if (c == '}') { (*p)++; break; }
+        if (c == ',') { (*p)++; continue; }
+
+        char *key = json_parse_string(p, end);
+        if (!key) return -1;
+        if (json_advance(p, end) != ':') { free(key); return -1; }
+
+        if (strcmp(key, "dtype") == 0) {
+            char *val = json_parse_string(p, end);
+            out->dtype = parse_dtype(val);
+            free(val);
+        } else if (strcmp(key, "shape") == 0) {
+            if (json_advance(p, end) != '[') { free(key); return -1; }
+            out->ndim = 0;
+            while (*p < end) {
+                c = json_peek(p, end);
+                if (c == ']') { (*p)++; break; }
+                if (c == ',') { (*p)++; continue; }
+                out->shape[out->ndim++] = (uint64_t)json_parse_number(p, end);
+            }
+        } else if (strcmp(key, "data_offsets") == 0) {
+            if (json_advance(p, end) != '[') { free(key); return -1; }
+            uint64_t start = (uint64_t)json_parse_number(p, end);
+            if (json_peek(p, end) == ',') (*p)++;
+            uint64_t end_off = (uint64_t)json_parse_number(p, end);
+            out->data_offset = start;
+            out->data_size = end_off - start;
+            if (json_advance(p, end) != ']') { free(key); return -1; }
+        } else {
+            json_skip_value(p, end);
+        }
+        free(key);
+    }
+    return 0;
+}
+
+sst_model *sst_model_load(const char *path) {
+    int fd = open(path, O_RDONLY);
+    if (fd < 0) { fprintf(stderr, "open: %s\n", strerror(errno)); return NULL; }
+
+    struct stat st;
+    if (fstat(fd, &st) < 0) { close(fd); return NULL; }
+
+    uint64_t file_size = st.st_size;
+    void *map = mmap(NULL, file_size, PROT_READ, MAP_PRIVATE, fd, 0);
+    if (map == MAP_FAILED) { close(fd); return NULL; }
+
+    sst_model *m = calloc(1, sizeof(sst_model));
+    if (!m) { munmap(map, file_size); close(fd); return NULL; }
+
+    m->fd = fd;
+    m->map = map;
+    m->file_size = file_size;
+    m->header_size = *(uint64_t *)m->map;
+    m->name = strdup(path);
+
+    const char *json_start = (const char *)m->map + 8;
+    const char *json_end = json_start + m->header_size;
+    const char *p = json_start;
+
+    if (json_advance(&p, json_end) != '{') { sst_model_free(m); return NULL; }
+
+    /* First pass: count tensors */
+    {
+        const char *q = p;
+        uint64_t count = 0;
+        while (q < json_end) {
+            char c = json_peek(&q, json_end);
+            if (c == '}') break;
+            if (c == ',') { q++; continue; }
+            char *k = json_parse_string(&q, json_end);
+            if (!k) break;
+            free(k);
+            if (json_advance(&q, json_end) != ':') break;
+            json_skip_value(&q, json_end);
+            count++;
+        }
+        m->n_tensors = count;
+    }
+
+    m->tensors = calloc(m->n_tensors, sizeof(sst_tensor));
+    if (!m->tensors) { sst_model_free(m); return NULL; }
+
+    /* Second pass: parse tensors */
+    for (uint64_t i = 0; i < m->n_tensors; i++) {
+        char c = json_peek(&p, json_end);
+        if (c == ',') p++;
+        if (parse_one_tensor(&p, json_end, &m->tensors[i]) < 0) {
+            fprintf(stderr, "parse tensor %lu failed\n", i);
+            sst_model_free(m);
+            return NULL;
+        }
+    }
+
+    m->data_offset = 8 + m->header_size;
+    m->data_size = file_size - m->data_offset;
+    return m;
+}
+
+void sst_model_free(sst_model *m) {
+    if (!m) return;
+    if (m->tensors) {
+        for (uint64_t i = 0; i < m->n_tensors; i++)
+            free(m->tensors[i].name);
+        free(m->tensors);
+    }
+    if (m->map) munmap(m->map, m->file_size);
+    if (m->fd >= 0) close(m->fd);
+    free(m->name);
+    free(m);
+}
+
+sst_tensor *sst_model_find_tensor(sst_model *m, const char *name) {
+    if (!m || !name) return NULL;
+    for (uint64_t i = 0; i < m->n_tensors; i++)
+        if (m->tensors[i].name && strcmp(m->tensors[i].name, name) == 0)
+            return &m->tensors[i];
+    return NULL;
+}
+
+void *sst_model_tensor_data(sst_model *m, sst_tensor *t) {
+    if (!m || !t) return NULL;
+    uint64_t off = m->data_offset + t->data_offset;
+    if (off + t->data_size > m->file_size) return NULL;
+    return m->map + off;
+}
+
+/* ========================================================================
+ * Sharded model
+ * ======================================================================== */
+
+/* Sort function for qsort - alphabetical order */
+static int compare_strings(const void *a, const void *b) {
+    const char *sa = *(const char **)a;
+    const char *sb = *(const char **)b;
+    return strcmp(sa, sb);
+}
+
+sst_sharded_model *sst_sharded_model_load(const char *dir_path) {
+    DIR *dir = opendir(dir_path);
+    if (!dir) {
+        fprintf(stderr, "opendir %s: %s\n", dir_path, strerror(errno));
+        return NULL;
+    }
+
+    /* Collect .safetensors files */
+    uint32_t capacity = 64;
+    char **files = malloc(capacity * sizeof(char *));
+    uint32_t count = 0;
+
+    struct dirent *entry;
+    while ((entry = readdir(dir)) != NULL) {
+        const char *name = entry->d_name;
+        size_t len = strlen(name);
+        if (len > 12 && strcmp(name + len - 12, ".safetensors") == 0) {
+            if (count >= capacity) {
+                capacity *= 2;
+                files = realloc(files, capacity * sizeof(char *));
+            }
+            size_t dir_len = strlen(dir_path);
+            files[count] = malloc(dir_len + 1 + len + 1);
+            snprintf(files[count], dir_len + 1 + len + 1,
+                     "%s/%s", dir_path, name);
+            count++;
+        }
+    }
+    closedir(dir);
+
+    if (count == 0) {
+        fprintf(stderr, "no .safetensors files found in %s\n", dir_path);
+        free(files);
+        return NULL;
+    }
+
+    /* Sort alphabetically */
+    qsort(files, count, sizeof(char *), compare_strings);
+
+    fprintf(stderr, "Found %u safetensors shards\n", count);
+
+    /* Load each shard */
+    sst_sharded_model *model = calloc(1, sizeof(sst_sharded_model));
+    if (!model) {
+        for (uint32_t i = 0; i < count; i++) free(files[i]);
+        free(files);
+        return NULL;
+    }
+
+    model->n_models = count;
+    model->models = calloc(count, sizeof(sst_model *));
+    if (!model->models) {
+        free(model);
+        for (uint32_t i = 0; i < count; i++) free(files[i]);
+        free(files);
+        return NULL;
+    }
+
+    uint64_t total_tensors = 0;
+    for (uint32_t i = 0; i < count; i++) {
+        fprintf(stderr, "  Loading shard %u/%u: %s\n", i + 1, count, files[i]);
+        model->models[i] = sst_model_load(files[i]);
+        if (!model->models[i]) {
+            fprintf(stderr, "  Failed to load shard %u\n", i);
+            sst_sharded_model_free(model);
+            for (uint32_t j = 0; j < count; j++) free(files[j]);
+            free(files);
+            return NULL;
+        }
+        total_tensors += model->models[i]->n_tensors;
+        fprintf(stderr, "    %lu tensors\n", model->models[i]->n_tensors);
+    }
+
+    fprintf(stderr, "Total: %lu tensors across %u shards\n", total_tensors, count);
+
+    for (uint32_t i = 0; i < count; i++) free(files[i]);
+    free(files);
+
+    return model;
+}
+
+void sst_sharded_model_free(sst_sharded_model *m) {
+    if (!m) return;
+    if (m->models) {
+        for (uint64_t i = 0; i < m->n_models; i++) sst_model_free(m->models[i]);
+        free(m->models);
+    }
+    free(m);
+}
+
+sst_tensor *sst_sharded_model_find_tensor(sst_sharded_model *m, const char *name) {
+    if (!m || !name) return NULL;
+    for (uint64_t i = 0; i < m->n_models; i++) {
+        sst_tensor *t = sst_model_find_tensor(m->models[i], name);
+        if (t) return t;
+    }
+    return NULL;
+}
+
+void *sst_sharded_model_tensor_data(sst_sharded_model *m, sst_tensor *t) {
+    if (!m || !t) return NULL;
+    /* Find the model that actually contains this tensor by name */
+    for (uint64_t i = 0; i < m->n_models; i++) {
+        sst_tensor *found = sst_model_find_tensor(m->models[i], t->name);
+        if (found == t) {
+            return sst_model_tensor_data(m->models[i], t);
+        }
+    }
+    return NULL;
+}
+
+/* ========================================================================
+ * Format helpers
+ * ======================================================================== */
+
+float sst_nvfp4_scale_to_float(uint8_t s) {
+    int sign = (s >> 7) & 1;
+    int exp = (s >> 3) & 0xF;
+    int man = s & 0x7;
+    float v;
+    if (exp == 0)       v = (man / 8.0f) * powf(2.0f, -6);
+    else if (exp == 0xF) v = (man == 0) ? INFINITY : NAN;
+    else                v = (1.0f + man / 8.0f) * powf(2.0f, exp - 15);
+    return sign ? -v : v;
+}
+
+float sst_fp8_e4m3_to_float(uint8_t v) { return sst_nvfp4_scale_to_float(v); }
+
+const char *sst_model_get_metadata_string(sst_model *m, const char *k) { (void)m; (void)k; return NULL; }
+int64_t sst_model_get_metadata_int(sst_model *m, const char *k) { (void)m; (void)k; return -1; }
+double sst_model_get_metadata_float(sst_model *m, const char *k) { (void)m; (void)k; return -1.0; }
+
+
+/* =========================================================================
+ * FP8 KV Cache (merged: ds4_kv_cache.c)
+ * ========================================================================= */
+
+#include <stdlib.h>
+#include <string.h>
+
+/* The actual cache struct is defined in the .cu file for CUDA access */
+struct ds4_kv_cache {
+    uint32_t n_ctx;
+    uint32_t n_layers;
+    uint32_t n_kv_heads;
+    uint32_t head_dim;
+    void *d_k_cache;   /* GPU pointer */
+    void *d_v_cache;   /* GPU pointer */
+    uint32_t cur_len;
+    uint64_t total_bytes;
+};
+
+/* CUDA functions (defined in ds4_kv_cache.cu) */
+extern ds4_kv_cache *ds4_kv_cache_alloc_gpu(ds4_kv_cache *cache);
+extern void ds4_kv_cache_free_gpu(ds4_kv_cache *cache);
+extern void ds4_kv_cache_reset_gpu(ds4_kv_cache *cache);
+extern void ds4_kv_cache_append_gpu(ds4_kv_cache *cache, uint32_t layer,
+                                     uint32_t pos, const float *d_k, const float *d_v);
+extern void ds4_kv_cache_get_ptrs_gpu(ds4_kv_cache *cache, uint32_t layer,
+                                       void **d_k, void **d_v, uint32_t *stride);
+
+ds4_kv_cache *ds4_kv_cache_create(
+    uint32_t n_ctx, uint32_t n_layers,
+    uint32_t n_kv_heads, uint32_t head_dim)
+{
+    ds4_kv_cache *cache = (ds4_kv_cache *)calloc(1, sizeof(ds4_kv_cache));
+    if (!cache) return NULL;
+
+    cache->n_ctx = n_ctx;
+    cache->n_layers = n_layers;
+    cache->n_kv_heads = n_kv_heads;
+    cache->head_dim = head_dim;
+
+    /* FP8: 1 byte per element */
+    uint64_t row = (uint64_t)n_kv_heads * head_dim;
+    uint64_t layer = (uint64_t)n_ctx * row;
+    cache->total_bytes = 2 * (uint64_t)n_layers * layer;
+
+    fprintf(stderr, "KV Cache (FP8 E4M3): %u layers × %u ctx × %u heads × %u dim\n",
+            n_layers, n_ctx, n_kv_heads, head_dim);
+    fprintf(stderr, "  Total: %.2f MiB (vs FP32: %.2f MiB, 4× savings)\n",
+            cache->total_bytes / (1024.0 * 1024.0),
+            cache->total_bytes * 4 / (1024.0 * 1024.0));
+
+    return ds4_kv_cache_alloc_gpu(cache);
+}
+
+void ds4_kv_cache_free(ds4_kv_cache *cache) {
+    if (!cache) return;
+    ds4_kv_cache_free_gpu(cache);
+    free(cache);
+}
+
+void ds4_kv_cache_reset(ds4_kv_cache *cache) {
+    if (!cache) return;
+    ds4_kv_cache_reset_gpu(cache);
+    cache->cur_len = 0;
+}
+
+void ds4_kv_cache_append(
+    ds4_kv_cache *cache, uint32_t layer, uint32_t pos,
+    const float *d_k, const float *d_v)
+{
+    if (!cache) return;
+    ds4_kv_cache_append_gpu(cache, layer, pos, d_k, d_v);
+    if (pos + 1 > cache->cur_len) cache->cur_len = pos + 1;
+}
+
+void ds4_kv_cache_get_fp8_ptrs(
+    ds4_kv_cache *cache, uint32_t layer,
+    void **d_k_ptr, void **d_v_ptr, uint32_t *row_stride)
+{
+    if (!cache) {
+        if (d_k_ptr) *d_k_ptr = NULL;
+        if (d_v_ptr) *d_v_ptr = NULL;
+        if (row_stride) *row_stride = 0;
+        return;
+    }
+    ds4_kv_cache_get_ptrs_gpu(cache, layer, d_k_ptr, d_v_ptr, row_stride);
+}
+
+uint32_t ds4_kv_cache_len(const ds4_kv_cache *cache) {
+    return cache ? cache->cur_len : 0;
+}
+
+uint64_t ds4_kv_cache_memory_bytes(const ds4_kv_cache *cache) {
+    return cache ? cache->total_bytes : 0;
+}
+
+void ds4_kv_cache_stats(const ds4_kv_cache *cache, FILE *fp) {
+    if (!cache) { fprintf(fp, "KV Cache: NULL\n"); return; }
+    fprintf(fp, "KV Cache (FP8): %u layers × %u ctx × %u heads × %u dim, len=%u/%u, %.2f MiB\n",
+            cache->n_layers, cache->n_ctx, cache->n_kv_heads, cache->head_dim,
+            cache->cur_len, cache->n_ctx,
+            cache->total_bytes / (1024.0 * 1024.0));
+}
+
+
+/* =========================================================================
+ * Expert Cache (merged: ds4_expert_cache.c)
+ * ========================================================================= */
+/**
+ * ds4 Expert Cache
+ *
+ * LRU cache for MoE experts with hot/cold management.
+ */
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+
+#include "ds4_ssd_streaming.h"
+
+/* ========================================================================
+ * Expert Cache Implementation
+ * ======================================================================== */
+
+ssd_expert_cache *ssd_expert_cache_create(uint32_t capacity, uint64_t max_bytes) {
+    ssd_expert_cache *cache = calloc(1, sizeof(ssd_expert_cache));
+    if (!cache) return NULL;
+
+    cache->entries = calloc(capacity, sizeof(ssd_expert_entry));
+    if (!cache->entries) {
+        free(cache);
+        return NULL;
+    }
+
+    cache->capacity = capacity;
+    cache->count = 0;
+    cache->total_bytes = 0;
+    cache->max_bytes = max_bytes;
+    cache->hit_count = 0;
+    cache->miss_count = 0;
+
+    for (uint32_t i = 0; i < capacity; i++) {
+        cache->entries[i].is_loaded = false;
+        cache->entries[i].is_hot = false;
+    }
+
+    return cache;
+}
+
+void ssd_expert_cache_free(ssd_expert_cache *cache) {
+    if (!cache) return;
+
+    for (uint32_t i = 0; i < cache->capacity; i++) {
+        if (cache->entries[i].is_loaded) {
+            free(cache->entries[i].weight_gate);
+            free(cache->entries[i].weight_up);
+            free(cache->entries[i].weight_down);
+        }
+    }
+
+    free(cache->entries);
+    free(cache);
+}
+
+static ssd_expert_entry *find_entry(ssd_expert_cache *cache, uint32_t layer, uint32_t expert) {
+    for (uint32_t i = 0; i < cache->capacity; i++) {
+        ssd_expert_entry *e = &cache->entries[i];
+        if (e->is_loaded && e->layer_idx == layer && e->expert_idx == expert) {
+            return e;
+        }
+    }
+    return NULL;
+}
+
+static ssd_expert_entry *find_empty(ssd_expert_cache *cache) {
+    for (uint32_t i = 0; i < cache->capacity; i++) {
+        if (!cache->entries[i].is_loaded) {
+            return &cache->entries[i];
+        }
+    }
+    return NULL;
+}
+
+static ssd_expert_entry *find_victim(ssd_expert_cache *cache) {
+    ssd_expert_entry *victim = NULL;
+    uint64_t oldest_time = UINT64_MAX;
+
+    for (uint32_t i = 0; i < cache->capacity; i++) {
+        ssd_expert_entry *e = &cache->entries[i];
+        if (!e->is_loaded) continue;
+        if (e->is_hot) continue;
+
+        if (e->last_access < oldest_time) {
+            oldest_time = e->last_access;
+            victim = e;
+        }
+    }
+
+    return victim;
+}
+
+static void evict_entry(ssd_expert_cache *cache, ssd_expert_entry *entry) {
+    if (!entry || !entry->is_loaded) return;
+
+    free(entry->weight_gate);
+    free(entry->weight_up);
+    free(entry->weight_down);
+
+    cache->total_bytes -= entry->weight_size;
+    cache->count--;
+
+    entry->is_loaded = false;
+    entry->is_hot = false;
+    entry->weight_gate = NULL;
+    entry->weight_up = NULL;
+    entry->weight_down = NULL;
+    entry->weight_size = 0;
+}
+
+ssd_expert_entry *ssd_expert_cache_get(ssd_expert_cache *cache, uint32_t layer, uint32_t expert) {
+    if (!cache) return NULL;
+
+    ssd_expert_entry *entry = find_entry(cache, layer, expert);
+
+    if (entry) {
+        entry->last_access = ++cache->hit_count;
+        entry->access_count++;
+
+        if (entry->access_count >= 3 && !entry->is_hot) {
+            entry->is_hot = true;
+        }
+
+        return entry;
+    }
+
+    cache->miss_count++;
+    return NULL;
+}
+
+int ssd_expert_cache_put(ssd_expert_cache *cache, uint32_t layer, uint32_t expert,
+                         void *data, uint64_t size) {
+    if (!cache || !data) return -1;
+
+    ssd_expert_entry *existing = find_entry(cache, layer, expert);
+    if (existing) {
+        existing->last_access = ++cache->hit_count;
+        existing->access_count++;
+        return 0;
+    }
+
+    ssd_expert_entry *entry = find_empty(cache);
+
+    if (!entry) {
+        entry = find_victim(cache);
+        if (!entry) return -1;
+        evict_entry(cache, entry);
+    }
+
+    entry->layer_idx = layer;
+    entry->expert_idx = expert;
+    entry->last_access = ++cache->hit_count;
+    entry->access_count = 1;
+    entry->is_hot = false;
+    entry->is_loaded = true;
+    entry->weight_size = size;
+
+    entry->weight_gate = malloc(size);
+    if (!entry->weight_gate) {
+        entry->is_loaded = false;
+        return -1;
+    }
+    memcpy(entry->weight_gate, data, size);
+    entry->weight_up = NULL;
+    entry->weight_down = NULL;
+
+    cache->count++;
+    cache->total_bytes += size;
+
+    return 0;
+}
+
+void ssd_expert_cache_stats(ssd_expert_cache *cache, uint64_t *hits, uint64_t *misses, double *hit_rate) {
+    if (!cache) {
+        if (hits) *hits = 0;
+        if (misses) *misses = 0;
+        if (hit_rate) *hit_rate = 0.0;
+        return;
+    }
+
+    if (hits) *hits = cache->hit_count;
+    if (misses) *misses = cache->miss_count;
+    if (hit_rate) {
+        uint64_t total = cache->hit_count + cache->miss_count;
+        *hit_rate = (total > 0) ? (double)cache->hit_count / total : 0.0;
+    }
+}
+
