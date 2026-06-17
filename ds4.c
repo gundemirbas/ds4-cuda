@@ -1589,11 +1589,15 @@ static const gguf_type_info gguf_types[] = {
 enum {
     DS4_TENSOR_F32      = 0,
     DS4_TENSOR_F16      = 1,
+    DS4_TENSOR_BF16     = 2,
     DS4_TENSOR_Q8_0     = 8,
     DS4_TENSOR_Q2_K     = 10,
     DS4_TENSOR_Q4_K     = 12,
     DS4_TENSOR_IQ2_XXS  = 16,
     DS4_TENSOR_I32      = 26,
+    DS4_TENSOR_F8_E4M3  = 30,
+    DS4_TENSOR_NVFP4    = 31,
+    DS4_TENSOR_MXFP4    = 32,
 };
 
 typedef struct {

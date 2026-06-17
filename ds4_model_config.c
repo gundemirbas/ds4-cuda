@@ -33,7 +33,7 @@ static int json_expect(json_ctx *c, char expected) {
     return 0;
 }
 
-static char *json_parse_string(json_ctx *c) {
+static char *cfg_json_parse_string(json_ctx *c) {
     json_skip_ws(c);
     if (c->p >= c->end || *c->p != '"') return NULL;
     c->p++;
@@ -64,11 +64,11 @@ static int64_t json_parse_int(json_ctx *c) {
     return v * sign;
 }
 
-static void json_skip_value(json_ctx *c) {
+static void cfg_json_skip_value(json_ctx *c) {
     json_skip_ws(c);
     if (c->p >= c->end) return;
     char ch = *c->p;
-    if (ch == '"') { json_parse_string(c); return; }
+    if (ch == '"') { cfg_json_parse_string(c); return; }
     if (ch == '{') {
         c->p++;
         int depth = 1;
@@ -176,7 +176,7 @@ int ds4_config_load(const char *model_dir, ds4_config *cfg) {
         if (*ctx.p == '}') break;
         if (*ctx.p == ',') { ctx.p++; continue; }
 
-        char *key = json_parse_string(&ctx);
+        char *key = cfg_json_parse_string(&ctx);
         if (!key) break;
         json_skip_ws(&ctx);
         if (ctx.p >= ctx.end || *ctx.p != ':') { free(key); break; }
@@ -185,7 +185,7 @@ int ds4_config_load(const char *model_dir, ds4_config *cfg) {
         /* Model name */
         if (strcmp(key, "_name_or_path") == 0 ||
             strcmp(key, "name") == 0)
-            set_string(&cfg->name, json_parse_string(&ctx));
+            set_string(&cfg->name, cfg_json_parse_string(&ctx));
 
         /* Architecture */
         else if (strcmp(key, "n_layers") == 0 ||
@@ -257,7 +257,7 @@ int ds4_config_load(const char *model_dir, ds4_config *cfg) {
         else if (strcmp(key, "rope_orig_ctx") == 0)
             cfg->rope_orig_ctx = (uint64_t)json_parse_int(&ctx);
 
-        json_skip_value(&ctx);
+        cfg_json_skip_value(&ctx);
         free(key);
     }
 
