@@ -2084,7 +2084,7 @@ static bool model_open_safetensors(ds4_model *m, const char *model_dir,
      * so CUDA cudaHostRegisterMapped can pin the pages later),
      * then map each shard file at the correct offset within that space.
      * This allows abs_offset to be a global offset into a single mapping. */
-    void *virt_base = mmap(NULL, total_size_page, PROT_READ, MAP_SHARED | MAP_ANONYMOUS, -1, 0);
+    void *virt_base = mmap(NULL, total_size_page, PROT_READ, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
     if (virt_base == MAP_FAILED) {
         fprintf(stderr, "ds4: failed to create virtual mmap region: %s\n", strerror(errno));
         sst_sharded_model_free(sst);
