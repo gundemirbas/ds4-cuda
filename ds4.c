@@ -17612,6 +17612,10 @@ static int metal_graph_first_token_full_test(
                                                      (uint32_t)token,
                                                      DS4_N_EMBD,
                                                      DS4_N_HC) != 0;
+        /* Check if embed token caused error */
+        if (ok && ds4_gpu_synchronize() != 0) {
+            fprintf(stderr, "ds4: STALE ERROR after graph test embed_token_hc\n");
+        }
 
         for (uint32_t il = 0; ok && il < DS4_N_LAYER; il++) {
             ok = metal_graph_encode_decode_layer(&g, model, &weights->layer[il],
