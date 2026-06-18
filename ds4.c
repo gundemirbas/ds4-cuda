@@ -2405,12 +2405,12 @@ static void model_summary(const ds4_model *m) {
 
 /* Safetensors name mapping: GGUF names -> safetensors names */
 static const char *sst_lookup_name(const char *name) {
-    /* Output head */
+    /* Output head — safetensors names have NO .weight suffix for hc tensors */
     if (strcmp(name, "output.weight") == 0) return "head.weight";
     if (strcmp(name, "output_norm.weight") == 0) return NULL; /* optional, skip */
-    if (strcmp(name, "output_hc_base") == 0) return "hc_head_base";
-    if (strcmp(name, "output_hc_fn") == 0) return "hc_head_fn";
-    if (strcmp(name, "output_hc_scale") == 0) return "hc_head_scale";
+    if (strcmp(name, "output_hc_base.weight") == 0) return "hc_head_base";
+    if (strcmp(name, "output_hc_fn.weight") == 0) return "hc_head_fn";
+    if (strcmp(name, "output_hc_scale.weight") == 0) return "hc_head_scale";
     /* Token embedding */
     if (strcmp(name, "token_embd.weight") == 0) return "embed.weight";
     return NULL;
