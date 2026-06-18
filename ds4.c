@@ -2244,8 +2244,13 @@ static bool model_open_safetensors(ds4_model *m, const char *model_dir,
                     int n_exp = experts_per_layer[l];
                     if (n_exp == 0) continue;
                     
-                    /* Find an expert tensor to get the per-expert shape */
-                    uint64_t exp_dim0 = 0, exp_dim1 = 0;
+                    /* Find an expert tensor to get the per-expert LOGICAL dimensions.
+                     * The safetensors shape is STORAGE dimensions (NVFP4 packs 2 per byte,
+                     * so shape[1]=2048 instead of 4096). We compute logical dimensions:
+                     *   expert_dim = shape[0] (2048)
+                     *   hidden_dim = shape[1] * 2 (4096) because NVFP4 packs 2 nibbles/byte */
+                    uint64_t exp_dim0 = 0; /* expert_dim */
+                    uint64_t exp_dim1 = 0; /* hidden_dim (storage) */
                     for (uint64_t i = 0; i < sst->n_models; i++) {
                         sst_model *sm = sst->models[i];
                         for (uint64_t j = 0; j < sm->n_tensors; j++) {
@@ -2254,14 +2259,17 @@ static bool model_open_safetensors(ds4_model *m, const char *model_dir,
                             char t_suffix[64];
                             if (sscanf(st->name, "layers.%d.ffn.experts.%d.%63s", &t_layer, &t_expert, t_suffix) == 3) {
                                 if (t_layer == l && t_expert == 0 && strcmp(t_suffix, "w1.weight") == 0) {
-                                    exp_dim0 = st->shape[0];
-                                    exp_dim1 = st->shape[1];
+                                    exp_dim0 = st->shape[0]; /* expert_dim */
+                                    exp_dim1 = st->shape[1]; /* hidden_dim_storage */
                                     break;
                                 }
                             }
                         }
                         if (exp_dim0 > 0) break;
                     }
+                    if (exp_dim0 == 0) continue;
+                    /* Logical hidden_dim = storage_dim * 2 (NVFP4 packs 2 per byte) */
+                    uint64_t hidden_dim = exp_dim1 * 2;
                     
                     if (exp_dim0 == 0) continue; /* Should not happen */
                     
@@ -2272,10 +2280,10 @@ static bool model_open_safetensors(ds4_model *m, const char *model_dir,
                         ds4_tensor *vt = &m->tensors[vi++];
                         vt->type = DS4_TENSOR_NVFP4;
                         vt->ndim = 3;
-                        vt->dim[0] = exp_dim1;
+                        vt->dim[0] = hidden_dim;
                         vt->dim[1] = exp_dim0;
                         vt->dim[2] = (uint64_t)n_exp;
-                        vt->elements = (uint64_t)n_exp * exp_dim0 * exp_dim1;
+                        vt->elements = (uint64_t)n_exp * exp_dim0 * hidden_dim;
                         uint64_t w_bytes = (exp_dim0 * exp_dim1 / 2) * n_exp;
                         uint64_t s_bytes = (exp_dim0 * exp_dim1 / 16) * n_exp;
                         vt->bytes = w_bytes + s_bytes;
@@ -2291,10 +2299,10 @@ static bool model_open_safetensors(ds4_model *m, const char *model_dir,
                         ds4_tensor *vt = &m->tensors[vi++];
                         vt->type = DS4_TENSOR_NVFP4;
                         vt->ndim = 3;
-                        vt->dim[0] = exp_dim1;
+                        vt->dim[0] = hidden_dim;
                         vt->dim[1] = exp_dim0;
                         vt->dim[2] = (uint64_t)n_exp;
-                        vt->elements = (uint64_t)n_exp * exp_dim0 * exp_dim1;
+                        vt->elements = (uint64_t)n_exp * exp_dim0 * hidden_dim;
                         uint64_t w_bytes = (exp_dim0 * exp_dim1 / 2) * n_exp;
                         uint64_t s_bytes = (exp_dim0 * exp_dim1 / 16) * n_exp;
                         vt->bytes = w_bytes + s_bytes;
@@ -2311,9 +2319,9 @@ static bool model_open_safetensors(ds4_model *m, const char *model_dir,
                         vt->type = DS4_TENSOR_NVFP4;
                         vt->ndim = 3;
                         vt->dim[0] = exp_dim0;
-                        vt->dim[1] = exp_dim1;
+                        vt->dim[1] = hidden_dim;
                         vt->dim[2] = (uint64_t)n_exp;
-                        vt->elements = (uint64_t)n_exp * exp_dim1 * exp_dim0;
+                        vt->elements = (uint64_t)n_exp * hidden_dim * exp_dim0;
                         uint64_t w_bytes = (exp_dim1 * exp_dim0 / 2) * n_exp;
                         uint64_t s_bytes = (exp_dim1 * exp_dim0 / 16) * n_exp;
                         vt->bytes = w_bytes + s_bytes;
