@@ -8152,15 +8152,22 @@ extern "C" int ds4_gpu_rms_norm_weight_rows_tensor(ds4_gpu_tensor *out, const ds
     memcpy(tmp, w, w_bytes);
     cudaMemcpy(d_w, tmp, w_bytes, cudaMemcpyHostToDevice);
     free(tmp);
-    /* Debug: check pointer types */
+    /* Debug: test each pointer individually */
     {
-        cudaPointerAttributes attr;
-        if (cudaPointerGetAttributes(&attr, out->ptr) == cudaSuccess)
-            fprintf(stderr, "ds4: rms_rows out_ptr type=%d\n", attr.type);
-        if (cudaPointerGetAttributes(&attr, x->ptr) == cudaSuccess)
-            fprintf(stderr, "ds4: rms_rows x_ptr type=%d\n", attr.type);
-        if (cudaPointerGetAttributes(&attr, d_w) == cudaSuccess)
-            fprintf(stderr, "ds4: rms_rows w_ptr type=%d\n", attr.type);
+        __device__ float test_val = 0;
+        (void)cudaGetLastError();
+        /* Test x_ptr read */
+        cudaMemcpy(&test_val, (const float *)x->ptr, sizeof(float), cudaMemcpyDeviceToHost);
+        cudaError_t x_err = cudaGetLastError();
+        fprintf(stderr, "ds4: x_ptr read test: err=%s val=%f\n", cudaGetErrorString(x_err), test_val);
+        /* Test w_ptr read */
+        cudaMemcpy(&test_val, d_w, sizeof(float), cudaMemcpyDeviceToHost);
+        cudaError_t w_err = cudaGetLastError();
+        fprintf(stderr, "ds4: w_ptr read test: err=%s val=%f\n", cudaGetErrorString(w_err), test_val);
+        /* Test out_ptr read */
+        cudaMemcpy(&test_val, (float *)out->ptr, sizeof(float), cudaMemcpyDeviceToHost);
+        cudaError_t o_err = cudaGetLastError();
+        fprintf(stderr, "ds4: out_ptr read test: err=%s val=%f\n", cudaGetErrorString(o_err), test_val);
     }
     (void)cudaGetLastError();
     rms_norm_weight_kernel<<<rows, 256>>>((float *)out->ptr, (const float *)x->ptr, d_w, n, rows, eps);
