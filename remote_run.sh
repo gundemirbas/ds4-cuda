@@ -4,7 +4,7 @@ set -e
 
 echo "=== Remote Build & Run ==="
 
-MODEL_DIR="/home/xexnaor/.cache/huggingface/hub/models--nvidia--DeepSeek-V4-Flash-NVFP4/snapshots/7fc18be2b215ae48260383d4a228ec8a033046f7"
+MODEL_DIR="/home/xexnaor/.cache/huggingface/hub/models--nvidia--DeepSeek-V4-Flash-NVFP4/snapshots/e3cd60e7de98e9867116860d522499a728de1cf9"
 
 # SSH into remote and execute commands
 ssh xexnaor@10.0.0.2 << REMOTE_SCRIPT
