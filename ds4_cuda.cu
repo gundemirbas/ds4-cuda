@@ -8165,28 +8165,12 @@ extern "C" int ds4_gpu_rms_norm_weight_rows_tensor(ds4_gpu_tensor *out, const ds
     memcpy(tmp, w, w_bytes);
     cudaMemcpy(d_w, tmp, w_bytes, cudaMemcpyHostToDevice);
     free(tmp);
-    /* Debug: test each pointer individually */
-    {
-        float test_val = 0;
-        (void)cudaGetLastError();
-        /* Test x_ptr read */
-        cudaMemcpy(&test_val, (const float *)x->ptr, sizeof(float), cudaMemcpyDeviceToHost);
-        cudaError_t x_err = cudaGetLastError();
-        fprintf(stderr, "ds4: x_ptr read test: err=%s val=%f\n", cudaGetErrorString(x_err), test_val);
-        /* Test w_ptr read */
-        cudaMemcpy(&test_val, d_w, sizeof(float), cudaMemcpyDeviceToHost);
-        cudaError_t w_err = cudaGetLastError();
-        fprintf(stderr, "ds4: w_ptr read test: err=%s val=%f\n", cudaGetErrorString(w_err), test_val);
-        /* Test out_ptr read */
-        cudaMemcpy(&test_val, (float *)out->ptr, sizeof(float), cudaMemcpyDeviceToHost);
-        cudaError_t o_err = cudaGetLastError();
-        fprintf(stderr, "ds4: out_ptr read test: err=%s val=%f\n", cudaGetErrorString(o_err), test_val);
-    }
+    /* Sync to catch any stale error from previous kernel */
     (void)cudaGetLastError();
     rms_norm_weight_kernel<<<rows, 256>>>((float *)out->ptr, (const float *)x->ptr, d_w, n, rows, eps);
     cudaError_t launch_err = cudaDeviceSynchronize();
     if (launch_err != cudaSuccess) {
-        fprintf(stderr, "ds4: rms_norm_weight_rows FAILED: rows=%u n=%u out_ptr=%p x_ptr=%p w_ptr=%p err=%s\n",
+        fprintf(stderr, "ds4: rms_norm_weight_rows FAILED: rows=%u n=%u out=%p x=%p w=%p err=%s\n",
                 rows, n, out->ptr, x->ptr, d_w, cudaGetErrorString(launch_err));
     }
     int ok = cuda_ok(launch_err, "rms_norm_weight_rows sync");
