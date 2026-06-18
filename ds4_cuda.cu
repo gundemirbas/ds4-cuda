@@ -8152,6 +8152,16 @@ extern "C" int ds4_gpu_rms_norm_weight_rows_tensor(ds4_gpu_tensor *out, const ds
     memcpy(tmp, w, w_bytes);
     cudaMemcpy(d_w, tmp, w_bytes, cudaMemcpyHostToDevice);
     free(tmp);
+    /* Debug: check pointer types */
+    {
+        cudaPointerAttributes attr;
+        if (cudaPointerGetAttributes(&attr, out->ptr) == cudaSuccess)
+            fprintf(stderr, "ds4: rms_rows out_ptr type=%d mem=%d\n", attr.type, attr.memoryType);
+        if (cudaPointerGetAttributes(&attr, x->ptr) == cudaSuccess)
+            fprintf(stderr, "ds4: rms_rows x_ptr type=%d mem=%d\n", attr.type, attr.memoryType);
+        if (cudaPointerGetAttributes(&attr, d_w) == cudaSuccess)
+            fprintf(stderr, "ds4: rms_rows w_ptr type=%d mem=%d\n", attr.type, attr.memoryType);
+    }
     (void)cudaGetLastError();
     rms_norm_weight_kernel<<<rows, 256>>>((float *)out->ptr, (const float *)x->ptr, d_w, n, rows, eps);
     cudaError_t launch_err = cudaDeviceSynchronize();
