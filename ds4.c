@@ -16964,7 +16964,7 @@ static bool metal_graph_matmul_plain_tensor(
         uint64_t                out_dim,
         const ds4_gpu_tensor *x,
         uint64_t                n_tok) {
-    if (w->type == DS4_TENSOR_F16) {
+    if (w->type == DS4_TENSOR_F16 || w->type == DS4_TENSOR_BF16) {
         return ds4_gpu_matmul_f16_tensor(out, model->map, model->size,
                                            w->abs_offset, in_dim, out_dim, x, n_tok) != 0;
     }
