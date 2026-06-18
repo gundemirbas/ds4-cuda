@@ -5602,7 +5602,7 @@ static void matvec_q8_0_worker(void *vctx, uint64_t r0, uint64_t r1) {
  * ========================================================================= */
 
 /* NVFP4 GEMV dispatch — uses tensor core MMA on sm_121a */
-static void matvec_nvfp4_dispatch(ds4_gpu_tensor *out, const ds4_gpu_tensor *x,
+static void __attribute__((unused)) matvec_nvfp4_dispatch(ds4_gpu_tensor *out, const ds4_gpu_tensor *x,
                                    const void *model_map, uint64_t model_size,
                                    uint64_t weight_offset, uint64_t in_dim, uint64_t out_dim) {
     ds4_gpu_matmul_nvfp4_tensor(out, model_map, model_size,
@@ -5610,7 +5610,7 @@ static void matvec_nvfp4_dispatch(ds4_gpu_tensor *out, const ds4_gpu_tensor *x,
 }
 
 /* FP8 E4M3 GEMV dispatch — uses tensor core on sm_121a */
-static void matvec_f8e4m3_dispatch(ds4_gpu_tensor *out, const ds4_gpu_tensor *x,
+static void __attribute__((unused)) matvec_f8e4m3_dispatch(ds4_gpu_tensor *out, const ds4_gpu_tensor *x,
                                     const void *model_map, uint64_t model_size,
                                     uint64_t weight_offset, uint64_t in_dim, uint64_t out_dim) {
     ds4_gpu_matmul_f8e4m3_tensor(out, model_map, model_size,
