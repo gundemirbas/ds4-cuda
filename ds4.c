@@ -3688,6 +3688,9 @@ static void tensor_expect_layout(
                       actual == DS4_TENSOR_MXFP4 || actual == DS4_TENSOR_F16 ||
                       actual == DS4_TENSOR_F32 || actual == DS4_TENSOR_BF16);
                 break;
+            case DS4_TENSOR_I32:
+                ok = (actual == DS4_TENSOR_F32);
+                break;
             default:
                 ok = 0;
                 break;
