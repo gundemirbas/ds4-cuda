@@ -21114,6 +21114,10 @@ static bool metal_graph_prefill_layer_major(
                                                      prompt,
                                                      start,
                                                      n_tokens);
+        /* Check if prompt upload caused error */
+        if (ok && ds4_gpu_synchronize() != 0) {
+            fprintf(stderr, "ds4: STALE ERROR after prompt embedding upload\n");
+        }
         if (ok) ok = ds4_gpu_begin_commands() != 0;
         /* Catch stale error from prompt embedding upload */
         if (ok && ds4_gpu_synchronize() != 0) {
