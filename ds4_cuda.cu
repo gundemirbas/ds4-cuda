@@ -237,7 +237,6 @@ static int cuda_model_copy_to_device_streamed(
         uint64_t bytes,
         const char *what);
 static uint64_t cuda_model_cache_limit_bytes(void);
-static uint64_t cuda_model_local_model_limit_bytes(void);
 static int cuda_model_cache_limit_explicit(void);
 __global__ static void dequant_q8_0_to_f16_kernel(
         __half *out,
@@ -1126,13 +1125,6 @@ static uint64_t cuda_model_cache_limit_bytes(void) {
      * use distributed layer loading unless the operator opts into a larger
      * cache budget explicitly. */
     return 96ull * 1073741824ull;
-}
-
-static uint64_t cuda_model_local_model_limit_bytes(void) {
-    const uint64_t default_limit = 96ull * 1073741824ull;
-    if (!cuda_model_cache_limit_explicit()) return default_limit;
-    const uint64_t explicit_limit = cuda_model_cache_limit_bytes();
-    return explicit_limit > default_limit ? explicit_limit : default_limit;
 }
 
 static int cuda_model_cache_limit_explicit(void) {
@@ -13905,14 +13897,11 @@ __global__ void topk_256_kernel(const float *scores, int *indices, int k) {
     __shared__ int si[256];
     __shared__ float tval[256];
     __shared__ int tidx[256];
-    __shared__ int best_idx_s;
-    __shared__ float best_val_s;
     int tid = threadIdx.x;
     if (tid < 256) { sv[tid] = scores[tid]; si[tid] = tid; }
     __syncthreads();
     /* Selection sort: find top k by iterating k times, each time thread 0 finds the max */
     for (int i = 0; i < k; i++) {
-        if (tid == 0) { best_idx_s = -1; best_val_s = -1e38f; }
         __syncthreads();
         /* Each thread checks its elements */
         float local_best = -1e38f;
@@ -14046,7 +14035,6 @@ __global__ void fp8_attention_scores_kernel(
     if (h >= n_heads) return;
     int kv_h = h % n_kv_heads;
     int tid = threadIdx.x;
-    float score = 0.0f;
     __shared__ float q_cache[512];
     if (tid < head_dim) {
         q_cache[tid] = d_q[h * head_dim + tid];
