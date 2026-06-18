@@ -390,6 +390,8 @@ static const char *cuda_model_range_populate_device_copy(const void *model_map,
         /* Try cudaMemcpyDefault first (UVA path), fall back to temporary CPU buffer */
         err = cudaMemcpy((char *)dev + done, src + done, (size_t)n, cudaMemcpyDefault);
         if (err != cudaSuccess) {
+            /* Clear stale error before fallback */
+            (void)cudaGetLastError();
             /* Fallback: copy through a persistent staging buffer */
             if (!stage) {
                 stage = malloc(stage_size);
@@ -411,6 +413,7 @@ static const char *cuda_model_range_populate_device_copy(const void *model_map,
                             (double)(done + sub_done) / 1048576.0,
                             (double)bytes / 1048576.0,
                             cudaGetErrorString(err));
+                    (void)cudaGetLastError();
                     (void)cudaFree(dev);
                     if (stage) free(stage);
                     return NULL;
