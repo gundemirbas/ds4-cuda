@@ -2147,6 +2147,166 @@ static bool model_open_safetensors(ds4_model *m, const char *model_dir,
     m->shard_count = sst->n_models;
     m->shard_models = sst;  /* Keep sst alive — we own it now */
     
+    /* Create virtual fused expert tensors for safetensors models.
+     * In GGUF, all 256 experts per layer are fused into one tensor (e.g.,
+     * blk.0.ffn_gate_exps.weight shape [256*2048, 4096]). In safetensors,
+     * each expert is stored separately (layers.0.ffn.experts.%d.w1.weight
+     * shape [2048, 4096]). We create virtual tensors with the fused shape
+     * so weights_bind can find them. Actual data fusion happens on GPU. */
+    {
+        /* Count expert layers and experts per layer */
+        int max_layer = -1;
+        int experts_per_layer[256];
+        memset(experts_per_layer, 0, sizeof(experts_per_layer));
+        uint64_t n_virtual = 0;
+        
+        /* Scan all safetensors for expert tensors */
+        for (uint64_t i = 0; i < sst->n_models; i++) {
+            sst_model *sm = sst->models[i];
+            for (uint64_t j = 0; j < sm->n_tensors; j++) {
+                sst_tensor *st = &sm->tensors[j];
+                /* Parse: layers.%u.ffn.experts.%d.w1.weight */
+                int layer;
+                int expert;
+                char suffix[64];
+                if (sscanf(st->name, "layers.%d.ffn.experts.%d.%63s", &layer, &expert, suffix) == 3) {
+                    if (layer > max_layer) max_layer = layer;
+                    if (experts_per_layer[layer] == 0) {
+                        /* First expert tensor type for this layer — count unique experts */
+                        /* Actually we need to count unique expert IDs per layer */
+                        experts_per_layer[layer] = 1; /* placeholder, will refine */
+                    }
+                }
+            }
+        }
+        
+        /* Count unique experts per layer by looking at w1 weight tensors */
+        if (max_layer >= 0) {
+            memset(experts_per_layer, 0, sizeof(experts_per_layer));
+            for (uint64_t i = 0; i < sst->n_models; i++) {
+                sst_model *sm = sst->models[i];
+                for (uint64_t j = 0; j < sm->n_tensors; j++) {
+                    sst_tensor *st = &sm->tensors[j];
+                    int layer;
+                    int expert;
+                    if (sscanf(st->name, "layers.%d.ffn.experts.%d.w1.weight", &layer, &expert) == 2) {
+                        if (expert >= experts_per_layer[layer]) {
+                            experts_per_layer[layer] = expert + 1;
+                        }
+                    }
+                }
+            }
+            
+            /* Count how many layers have experts */
+            uint64_t n_expert_layers = 0;
+            for (int l = 0; l <= max_layer; l++) {
+                if (experts_per_layer[l] > 0) n_expert_layers++;
+            }
+            
+            /* Each expert layer needs 3 virtual tensors (gate, up, down) */
+            n_virtual = n_expert_layers * 3;
+        }
+        
+        if (n_virtual > 0) {
+            /* Reallocate m->tensors with extra entries */
+            uint64_t old_n = m->n_tensors;
+            uint64_t new_n = old_n + n_virtual;
+            ds4_tensor *new_tensors = calloc(new_n, sizeof(ds4_tensor));
+            if (!new_tensors) {
+                fprintf(stderr, "ds4: out of memory for virtual expert tensors\n");
+            } else {
+                memcpy(new_tensors, m->tensors, old_n * sizeof(ds4_tensor));
+                free(m->tensors);
+                m->tensors = new_tensors;
+                m->n_tensors = new_n;
+                
+                /* Populate virtual fused expert tensors */
+                uint64_t vi = old_n;
+                for (int l = 0; l <= max_layer; l++) {
+                    int n_exp = experts_per_layer[l];
+                    if (n_exp == 0) continue;
+                    
+                    /* Find an expert tensor to get the per-expert shape */
+                    uint64_t exp_dim0 = 0, exp_dim1 = 0;
+                    for (uint64_t i = 0; i < sst->n_models; i++) {
+                        sst_model *sm = sst->models[i];
+                        for (uint64_t j = 0; j < sm->n_tensors; j++) {
+                            sst_tensor *st = &sm->tensors[j];
+                            int t_layer, t_expert;
+                            char t_suffix[64];
+                            if (sscanf(st->name, "layers.%d.ffn.experts.%d.%63s", &t_layer, &t_expert, t_suffix) == 3) {
+                                if (t_layer == l && t_expert == 0 && strcmp(t_suffix, "w1.weight") == 0) {
+                                    exp_dim0 = st->shape[0];
+                                    exp_dim1 = st->shape[1];
+                                    break;
+                                }
+                            }
+                        }
+                        if (exp_dim0 > 0) break;
+                    }
+                    
+                    if (exp_dim0 == 0) continue; /* Should not happen */
+                    
+                    /* Create virtual ffn_gate_exps (w1) */
+                    {
+                        char vname[128];
+                        snprintf(vname, sizeof(vname), "blk.%d.ffn_gate_exps.weight", l);
+                        ds4_tensor *vt = &m->tensors[vi++];
+                        vt->type = DS4_TENSOR_NVFP4;
+                        vt->ndim = 2;
+                        vt->dim[0] = (uint64_t)n_exp * exp_dim0;
+                        vt->dim[1] = exp_dim1;
+                        vt->elements = vt->dim[0] * vt->dim[1];
+                        /* Calculate bytes: NVFP4 uses 2 nibbles per byte + scales */
+                        uint64_t w_bytes = (exp_dim0 * exp_dim1 / 2) * n_exp;
+                        uint64_t s_bytes = (exp_dim0 * exp_dim1 / 16) * n_exp;
+                        vt->bytes = w_bytes + s_bytes;
+                        vt->abs_offset = 0; /* Virtual tensor, no single file offset */
+                        vt->rel_offset = 0;
+                        vt->name.len = strlen(vname);
+                        vt->name.ptr = strdup(vname);
+                    }
+                    /* Create virtual ffn_up_exps (w3) */
+                    {
+                        char vname[128];
+                        snprintf(vname, sizeof(vname), "blk.%d.ffn_up_exps.weight", l);
+                        ds4_tensor *vt = &m->tensors[vi++];
+                        vt->type = DS4_TENSOR_NVFP4;
+                        vt->ndim = 2;
+                        vt->dim[0] = (uint64_t)n_exp * exp_dim0;
+                        vt->dim[1] = exp_dim1;
+                        vt->elements = vt->dim[0] * vt->dim[1];
+                        uint64_t w_bytes = (exp_dim0 * exp_dim1 / 2) * n_exp;
+                        uint64_t s_bytes = (exp_dim0 * exp_dim1 / 16) * n_exp;
+                        vt->bytes = w_bytes + s_bytes;
+                        vt->abs_offset = 0;
+                        vt->rel_offset = 0;
+                        vt->name.len = strlen(vname);
+                        vt->name.ptr = strdup(vname);
+                    }
+                    /* Create virtual ffn_down_exps (w2) */
+                    {
+                        char vname[128];
+                        snprintf(vname, sizeof(vname), "blk.%d.ffn_down_exps.weight", l);
+                        ds4_tensor *vt = &m->tensors[vi++];
+                        vt->type = DS4_TENSOR_NVFP4;
+                        vt->ndim = 2;
+                        vt->dim[0] = exp_dim1;
+                        vt->dim[1] = (uint64_t)n_exp * exp_dim0;
+                        vt->elements = vt->dim[0] * vt->dim[1];
+                        uint64_t w_bytes = (exp_dim1 * exp_dim0 / 2) * n_exp;
+                        uint64_t s_bytes = (exp_dim1 * exp_dim0 / 16) * n_exp;
+                        vt->bytes = w_bytes + s_bytes;
+                        vt->abs_offset = 0;
+                        vt->rel_offset = 0;
+                        vt->name.len = strlen(vname);
+                        vt->name.ptr = strdup(vname);
+                    }
+                }
+            }
+        }
+    }
+    
     /* TODO: Load config.json for model parameters */
     /* TODO: Load tokenizer.json */
     
@@ -2243,12 +2403,110 @@ static void model_summary(const ds4_model *m) {
 
 }
 
+/* Safetensors name mapping: GGUF names -> safetensors names */
+static const char *sst_lookup_name(const char *name) {
+    /* Output head */
+    if (strcmp(name, "output.weight") == 0) return "head.weight";
+    if (strcmp(name, "output_norm.weight") == 0) return NULL; /* optional, skip */
+    if (strcmp(name, "output_hc_base") == 0) return "hc_head_base";
+    if (strcmp(name, "output_hc_fn") == 0) return "hc_head_fn";
+    if (strcmp(name, "output_hc_scale") == 0) return "hc_head_scale";
+    /* Token embedding */
+    if (strcmp(name, "token_embd.weight") == 0) return "embed.weight";
+    return NULL;
+}
+
+/* Map a GGUF layer tensor name to safetensors name.
+ * Input: "blk.%u.XXXX" -> Output: "layers.%u.YYYY"
+ * Returns 0 on success, -1 if no mapping exists.
+ */
+static int sst_map_layer_tensor(const char *name, char *dst, size_t dst_size) {
+    /* Extract layer number and suffix after "blk." */
+    if (strncmp(name, "blk.", 4) != 0) return -1;
+    const char *rest = name + 4;
+    /* Parse layer number until '.' */
+    int layer = 0;
+    while (*rest >= '0' && *rest <= '9') { layer = layer * 10 + (*rest - '0'); rest++; }
+    if (*rest != '.') return -1;
+    rest++; /* skip '.' */
+    /* Build safetensors prefix: "layers.%u." */
+    int n = snprintf(dst, dst_size, "layers.%u.", layer);
+    if (n < 0) return -1;
+    dst += n; dst_size -= (size_t)n; if (dst_size <= 1) return -1;
+    /* Map suffix */
+    if (strcmp(rest, "attn_q_a.weight") == 0)      return snprintf(dst, dst_size, "attn.wq_a.weight") > 0 ? 0 : -1;
+    if (strcmp(rest, "attn_q_a.scale") == 0)       return snprintf(dst, dst_size, "attn.wq_a.scale") > 0 ? 0 : -1;
+    if (strcmp(rest, "attn_q_a_norm.weight") == 0) return snprintf(dst, dst_size, "attn.q_norm.weight") > 0 ? 0 : -1;
+    if (strcmp(rest, "attn_q_b.weight") == 0)      return snprintf(dst, dst_size, "attn.wq_b.weight") > 0 ? 0 : -1;
+    if (strcmp(rest, "attn_q_b.scale") == 0)       return snprintf(dst, dst_size, "attn.wq_b.scale") > 0 ? 0 : -1;
+    if (strcmp(rest, "attn_kv.weight") == 0)       return snprintf(dst, dst_size, "attn.wkv.weight") > 0 ? 0 : -1;
+    if (strcmp(rest, "attn_kv.scale") == 0)        return snprintf(dst, dst_size, "attn.wkv.scale") > 0 ? 0 : -1;
+    if (strcmp(rest, "attn_kv_a_norm.weight") == 0) return snprintf(dst, dst_size, "attn.kv_norm.weight") > 0 ? 0 : -1;
+    if (strcmp(rest, "attn_sinks.weight") == 0)    return snprintf(dst, dst_size, "attn.attn_sink") > 0 ? 0 : -1;
+    if (strcmp(rest, "attn_output_a.weight") == 0) return snprintf(dst, dst_size, "attn.wo_a.weight") > 0 ? 0 : -1;
+    if (strcmp(rest, "attn_output_a.scale") == 0)  return snprintf(dst, dst_size, "attn.wo_a.scale") > 0 ? 0 : -1;
+    if (strcmp(rest, "attn_output_b.weight") == 0) return snprintf(dst, dst_size, "attn.wo_b.weight") > 0 ? 0 : -1;
+    if (strcmp(rest, "attn_output_b.scale") == 0)  return snprintf(dst, dst_size, "attn.wo_b.scale") > 0 ? 0 : -1;
+    if (strcmp(rest, "attn_norm.weight") == 0)     return snprintf(dst, dst_size, "attn_norm.weight") > 0 ? 0 : -1;
+    if (strcmp(rest, "ffn_norm.weight") == 0)      return snprintf(dst, dst_size, "ffn_norm.weight") > 0 ? 0 : -1;
+    if (strcmp(rest, "hc_attn_base") == 0)         return snprintf(dst, dst_size, "hc_attn_base") > 0 ? 0 : -1;
+    if (strcmp(rest, "hc_attn_fn") == 0)           return snprintf(dst, dst_size, "hc_attn_fn") > 0 ? 0 : -1;
+    if (strcmp(rest, "hc_attn_scale") == 0)        return snprintf(dst, dst_size, "hc_attn_scale") > 0 ? 0 : -1;
+    if (strcmp(rest, "hc_ffn_base") == 0)          return snprintf(dst, dst_size, "hc_ffn_base") > 0 ? 0 : -1;
+    if (strcmp(rest, "hc_ffn_fn") == 0)            return snprintf(dst, dst_size, "hc_ffn_fn") > 0 ? 0 : -1;
+    if (strcmp(rest, "hc_ffn_scale") == 0)         return snprintf(dst, dst_size, "hc_ffn_scale") > 0 ? 0 : -1;
+    if (strcmp(rest, "ffn_gate_inp.weight") == 0)  return snprintf(dst, dst_size, "ffn.gate.weight") > 0 ? 0 : -1;
+    if (strcmp(rest, "ffn_gate_shexp.weight") == 0) return snprintf(dst, dst_size, "ffn.shared_experts.w1.weight") > 0 ? 0 : -1;
+    if (strcmp(rest, "ffn_gate_shexp.scale") == 0)  return snprintf(dst, dst_size, "ffn.shared_experts.w1.scale") > 0 ? 0 : -1;
+    if (strcmp(rest, "ffn_up_shexp.weight") == 0)   return snprintf(dst, dst_size, "ffn.shared_experts.w3.weight") > 0 ? 0 : -1;
+    if (strcmp(rest, "ffn_up_shexp.scale") == 0)    return snprintf(dst, dst_size, "ffn.shared_experts.w3.scale") > 0 ? 0 : -1;
+    if (strcmp(rest, "ffn_down_shexp.weight") == 0) return snprintf(dst, dst_size, "ffn.shared_experts.w2.weight") > 0 ? 0 : -1;
+    if (strcmp(rest, "ffn_down_shexp.scale") == 0)  return snprintf(dst, dst_size, "ffn.shared_experts.w2.scale") > 0 ? 0 : -1;
+    /* Compressor/Indexer */
+    if (strcmp(rest, "attn_compressor_ape.weight") == 0) return snprintf(dst, dst_size, "attn.compressor.ape.weight") > 0 ? 0 : -1;
+    if (strcmp(rest, "attn_compressor_kv.weight") == 0)  return snprintf(dst, dst_size, "attn.compressor.wkv.weight") > 0 ? 0 : -1;
+    if (strcmp(rest, "attn_compressor_gate.weight") == 0) return snprintf(dst, dst_size, "attn.compressor.wgate.weight") > 0 ? 0 : -1;
+    if (strcmp(rest, "attn_compressor_norm.weight") == 0) return snprintf(dst, dst_size, "attn.compressor.norm.weight") > 0 ? 0 : -1;
+    if (strcmp(rest, "indexer.attn_q_b.weight") == 0)    return snprintf(dst, dst_size, "attn.indexer.wq_b.weight") > 0 ? 0 : -1;
+    if (strcmp(rest, "indexer.attn_q_b.scale") == 0)     return snprintf(dst, dst_size, "attn.indexer.wq_b.scale") > 0 ? 0 : -1;
+    if (strcmp(rest, "indexer.proj.weight") == 0)        return snprintf(dst, dst_size, "attn.indexer.weights_proj.weight") > 0 ? 0 : -1;
+    if (strcmp(rest, "indexer_compressor_ape.weight") == 0) return snprintf(dst, dst_size, "attn.indexer.compressor.ape.weight") > 0 ? 0 : -1;
+    if (strcmp(rest, "indexer_compressor_kv.weight") == 0)  return snprintf(dst, dst_size, "attn.indexer.compressor.wkv.weight") > 0 ? 0 : -1;
+    if (strcmp(rest, "indexer_compressor_gate.weight") == 0) return snprintf(dst, dst_size, "attn.indexer.compressor.wgate.weight") > 0 ? 0 : -1;
+    if (strcmp(rest, "indexer_compressor_norm.weight") == 0) return snprintf(dst, dst_size, "attn.indexer.compressor.norm.weight") > 0 ? 0 : -1;
+    /* Expert tensors: return -1 to trigger special handling */
+    return -1;
+}
+
 static ds4_tensor *model_find_tensor(const ds4_model *m, const char *name) {
     const size_t len = strlen(name);
+    /* First try exact match */
     for (uint64_t i = 0; i < m->n_tensors; i++) {
         if (m->tensors[i].name.len == len &&
             memcmp(m->tensors[i].name.ptr, name, len) == 0) {
             return &m->tensors[i];
+        }
+    }
+    /* Try safetensors name mapping for non-layer tensors */
+    const char *mapped = sst_lookup_name(name);
+    if (mapped) {
+        const size_t mlen = strlen(mapped);
+        for (uint64_t i = 0; i < m->n_tensors; i++) {
+            if (m->tensors[i].name.len == mlen &&
+                memcmp(m->tensors[i].name.ptr, mapped, mlen) == 0) {
+                return &m->tensors[i];
+            }
+        }
+    }
+    /* Try safetensors name mapping for layer tensors */
+    char layer_name[256];
+    if (sst_map_layer_tensor(name, layer_name, sizeof(layer_name)) == 0) {
+        const size_t llen = strlen(layer_name);
+        for (uint64_t i = 0; i < m->n_tensors; i++) {
+            if (m->tensors[i].name.len == llen &&
+                memcmp(m->tensors[i].name.ptr, layer_name, llen) == 0) {
+                return &m->tensors[i];
+            }
         }
     }
     return NULL;
