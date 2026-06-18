@@ -8129,6 +8129,12 @@ extern "C" int ds4_gpu_matmul_f32_tensor(ds4_gpu_tensor *out, const void *model_
         return cublas_ok(st, "f32 matmul");
     }
     dim3 grid((unsigned)out_dim, (unsigned)n_tok, 1);
+    if (getenv("DS4_CUDA_DEBUG_MOE") != NULL) {
+        fprintf(stderr, "ds4: DBG matmul_f32_tensor grid=(%u,%u,1) dims=(%u,%u,%u)\n",
+                (unsigned)out_dim, (unsigned)n_tok,
+                (unsigned)in_dim, (unsigned)out_dim, (unsigned)n_tok);
+    }
+    (void)cudaGetLastError();
     matmul_f32_kernel<<<grid, 256>>>((float *)out->ptr, w, (const float *)x->ptr, in_dim, out_dim, n_tok);
     return cuda_ok(cudaGetLastError(), "matmul_f32 launch");
 }
