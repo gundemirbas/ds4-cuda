@@ -5619,7 +5619,7 @@ static void __attribute__((unused)) matvec_f8e4m3_dispatch(ds4_gpu_tensor *out, 
 
 /* Weight type dispatch — selects NVFP4/FP8/Q8_0 based on tensor type */
 /* Weight type dispatch — selects NVFP4/FP8/Q8_0 based on tensor type */
-static int matmul_weight_dispatch(
+static int __attribute__((unused)) matmul_weight_dispatch(
     ds4_gpu_tensor       *out,
     const void             *model_map,
     uint64_t                model_size,
