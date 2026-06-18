@@ -8156,11 +8156,11 @@ extern "C" int ds4_gpu_rms_norm_weight_rows_tensor(ds4_gpu_tensor *out, const ds
     {
         cudaPointerAttributes attr;
         if (cudaPointerGetAttributes(&attr, out->ptr) == cudaSuccess)
-            fprintf(stderr, "ds4: rms_rows out_ptr type=%d mem=%d\n", attr.type, attr.memoryType);
+            fprintf(stderr, "ds4: rms_rows out_ptr type=%d\n", attr.type);
         if (cudaPointerGetAttributes(&attr, x->ptr) == cudaSuccess)
-            fprintf(stderr, "ds4: rms_rows x_ptr type=%d mem=%d\n", attr.type, attr.memoryType);
+            fprintf(stderr, "ds4: rms_rows x_ptr type=%d\n", attr.type);
         if (cudaPointerGetAttributes(&attr, d_w) == cudaSuccess)
-            fprintf(stderr, "ds4: rms_rows w_ptr type=%d mem=%d\n", attr.type, attr.memoryType);
+            fprintf(stderr, "ds4: rms_rows w_ptr type=%d\n", attr.type);
     }
     (void)cudaGetLastError();
     rms_norm_weight_kernel<<<rows, 256>>>((float *)out->ptr, (const float *)x->ptr, d_w, n, rows, eps);
