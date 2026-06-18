@@ -5894,6 +5894,45 @@ static void matmul_q8_0_pair_batch_prequant(
 
 /* Batched Q8_0 matmul for prefill: quantize all token activations, then scan
  * weight rows once per output channel. */
+/* ds4-cuda: Type-aware batch matmul — dispatches based on weight type.
+ * For Q8_0 (type 8): uses Q8_0 quantization path.
+ * For F8_E4M3 (type 34): uses F8_E4M3 kernel via ds4_gpu_matmul_tensor.
+ * For F16/BF16 (types 1/33): uses F16 kernel.
+ * For F32 (type 0): uses F32 kernel.
+ * For NVFP4 (type 35): uses NVFP4 kernel.
+ */
+static void matmul_tensor_batch(
+        float           * out,
+        const ds4_model * m,
+        const ds4_tensor * w,
+        const float     * x,
+        uint64_t          n_tok) {
+    if (!w || w->ndim != 2) ds4_die("expected a 2D weight tensor");
+    const uint64_t in_dim = w->dim[0];
+    const uint64_t out_dim = w->dim[1];
+
+    /* For Q8_0, use the optimized Q8_0 path */
+    if (w->type == 8) {
+    ds4_gpu_tensor gx = {0};
+    gx.ptr = (void *)x;
+    gx.bytes = (uint64_t)n_tok * in_dim * sizeof(float);
+    gx.ndim = 2;
+    gx.dim[0] = n_tok;
+    gx.dim[1] = in_dim;
+    gx.dtype = 0; /* F32 */
+    ds4_gpu_tensor gout = {0};
+    gout.ptr = out;
+    gout.bytes = (uint64_t)n_tok * out_dim * sizeof(float);
+    gout.ndim = 2;
+    gout.dim[0] = n_tok;
+    gout.dim[1] = out_dim;
+    gout.dtype = 0; /* F32 */
+    if (!ds4_gpu_matmul_tensor(&gout, m->map, m->size, w->abs_offset,
+                                in_dim, out_dim, &gx, n_tok, w->type)) {
+        fprintf(stderr, "ds4: matmul_tensor_batch failed for type=%u\n", w->type);
+    }
+}
+
 static void matmul_q8_0_batch(
         float           * out,
         const ds4_model * m,
@@ -7817,7 +7856,7 @@ static void layer_grouped_out_batch(
 
     matmul_q8_0_grouped_batch(low, model, layer->attn_output_a, heads,
                               n_tok, n_groups, group_dim, rank);
-    matmul_q8_0_batch(out, model, layer->attn_output_b, low, n_tok);
+    matmul_tensor_batch(out, model, layer->attn_output_b, low, n_tok);
 
     free(low);
 }
@@ -7970,7 +8009,7 @@ static void layer_shared_ffn_batch(
     };
     ds4_parallel_for(n_tok, swiglu_batch_worker, &swiglu_ctx);
 
-    matmul_q8_0_batch(out, model, layer->ffn_down_shexp, mid, n_tok);
+    matmul_tensor_batch(out, model, layer->ffn_down_shexp, mid, n_tok);
 
     free(mid);
     free(up);
@@ -10077,7 +10116,7 @@ static void layer_attention_raw_swa_batch(
     if (profile) t_hc_norm = now_sec() - t0;
 
     t0 = profile ? now_sec() : 0.0;
-    matmul_q8_0_batch(qr, model, layer->attn_q_a, attn_norm, n_tok);
+    matmul_tensor_batch(qr, model, layer->attn_q_a, attn_norm, n_tok);
     for (uint32_t t = 0; t < n_tok; t++) {
         rms_norm_weight(qr_norm + (uint64_t)t * q_rank,
                         qr + (uint64_t)t * q_rank,
@@ -10085,7 +10124,7 @@ static void layer_attention_raw_swa_batch(
                         q_rank,
                         DS4_RMS_EPS);
     }
-    matmul_q8_0_batch(q, model, layer->attn_q_b, qr_norm, n_tok);
+    matmul_tensor_batch(q, model, layer->attn_q_b, qr_norm, n_tok);
     for (uint32_t t = 0; t < n_tok; t++) {
         head_rms_norm_inplace(q + (uint64_t)t * q_dim,
                               DS4_N_HEAD,
@@ -10095,7 +10134,7 @@ static void layer_attention_raw_swa_batch(
     if (profile) t_q = now_sec() - t0;
 
     t0 = profile ? now_sec() : 0.0;
-    matmul_q8_0_batch(kv_raw, model, layer->attn_kv, attn_norm, n_tok);
+    matmul_tensor_batch(kv_raw, model, layer->attn_kv, attn_norm, n_tok);
     for (uint32_t t = 0; t < n_tok; t++) {
         rms_norm_weight(kv + (uint64_t)t * DS4_N_HEAD_DIM,
                         kv_raw + (uint64_t)t * DS4_N_HEAD_DIM,

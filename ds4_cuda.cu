@@ -645,6 +645,11 @@ static void cuda_q8_f16_cache_disable_after_failure(const char *what, uint64_t r
 static int cuda_q8_f16_cache_allowed(const char *label, uint64_t in_dim, uint64_t out_dim) {
     if (g_quality_mode) return 0;
     if (g_q8_f16_disabled_after_oom) return 0;
+    /* ds4-cuda: In hmm_direct mode, model weights are read directly from mmap
+     * by GPU kernels. Q8->F16 dequant reads Q8_0 format but safetensors
+     * models have F8_E4M3/BF16/NVFP4 weights. Disable Q8 cache to avoid
+     * wrong format reads and illegal memory access. */
+    if (g_model_hmm_direct) return 0;
     if (getenv("DS4_CUDA_NO_Q8_F16_CACHE") != NULL) return 0;
     if (cuda_q8_f16_cache_limit_bytes() == 0) return 0;
     if (getenv("DS4_CUDA_Q8_F16_ALL") != NULL) return 1;
