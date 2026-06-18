@@ -13272,12 +13272,30 @@ extern "C" int ds4_gpu_matmul_tensor(
         uint64_t                n_tok,
         int                     weight_type) {
     switch (weight_type) {
-    case 31: /* DS4_TENSOR_NVFP4 */
+    case 35: /* DS4_TENSOR_NVFP4 */
         return ds4_gpu_matmul_nvfp4_tensor(out, model_map, model_size,
                                             weight_offset, in_dim, out_dim, x, n_tok);
-    case 30: /* DS4_TENSOR_F8_E4M3 */
+    case 34: /* DS4_TENSOR_F8_E4M3 */
         return ds4_gpu_matmul_f8e4m3_tensor(out, model_map, model_size,
                                              weight_offset, in_dim, out_dim, x, n_tok);
+    case 33: /* DS4_TENSOR_BF16 — same 2-byte layout as F16 */
+    case 1:  /* DS4_TENSOR_F16 */
+        return ds4_gpu_matmul_f16_tensor(out, model_map, model_size,
+                                          weight_offset, in_dim, out_dim, x, n_tok);
+    case 0:  /* DS4_TENSOR_F32 — 4-byte float weights */
+    {
+        if (weight_offset > model_size) return 0;
+        uint64_t weight_bytes = out_dim * in_dim * sizeof(float);
+        if (weight_bytes > model_size - weight_offset) return 0;
+        if (x->bytes < n_tok * in_dim * sizeof(float) ||
+            out->bytes < n_tok * out_dim * sizeof(float)) return 0;
+        const char *wptr = cuda_model_range_ptr(model_map, weight_offset, weight_bytes, "f32");
+        if (!wptr) return 0;
+        matmul_f32_kernel<<<dim3((unsigned int)out_dim, (unsigned int)n_tok), 256>>>(
+            (float *)out->ptr, (const float *)wptr,
+            (const float *)x->ptr, in_dim, out_dim, n_tok);
+        return cuda_ok(cudaGetLastError(), "f32 matmul launch");
+    }
     default:
         return ds4_gpu_matmul_q8_0_tensor(out, model_map, model_size,
                                            weight_offset, in_dim, out_dim, x, n_tok);
@@ -13599,20 +13617,24 @@ __device__ __forceinline__ float d_e2m1(uint8_t v) {
 }
 
 /* ========================================================================
- * 1. GEMV NVFP4 (UNPACKED U8): y[M] = W[M,K] × x[K]
- *    Each E2M1 value is stored as 1 byte (lower nibble = value)
- *    Scales: F8_E4M3, 1 per group of 8 values
+ * 1. GEMV NVFP4 (PACKED U8): y[M] = W[M,K] × x[K]
+ *    Each byte packs 2 E2M1 values (lower nibble, upper nibble).
+ *    Scales: F8_E4M3, 1 per group of 16 values (safetensors format)
  * ======================================================================== */
 __global__ void gemv_nvfp4_kernel(const float *x, const uint8_t *w, const uint8_t *ws,
                                    float *y, int M, int K, float ws2) {
     int row = blockIdx.x * blockDim.x + threadIdx.x;
     if (row >= M) return;
     float sum = 0.0f;
-    int scales_per_row = K / 8;  /* 1 scale per 8 values */
-    for (int i = 0; i < K; i++) {
-        uint8_t p = w[row * K + i];
-        float sc = d_f8e4m3(ws[row * scales_per_row + i/8]);
-        sum += d_e2m1(p) * ws2 * sc * x[i];
+    int K_packed = K / 2;            /* bytes per row */
+    int scales_per_row = K / 16;     /* 1 scale per 16 values (safetensors) */
+    for (int j = 0; j < K_packed; j++) {
+        uint8_t p = w[row * K_packed + j];
+        /* Lower nibble: even index */
+        float sc = d_f8e4m3(ws[row * scales_per_row + j/8]);
+        sum += d_e2m1(p & 0xF) * ws2 * sc * x[j * 2];
+        /* Upper nibble: odd index (same scale, same byte group) */
+        sum += d_e2m1(p >> 4) * ws2 * sc * x[j * 2 + 1];
     }
     y[row] = sum;
 }

@@ -1643,6 +1643,10 @@ typedef struct {
     /* Safetensors multi-shard support */
     uint64_t shard_count;
     void *shard_models;  /* sst_sharded_model *, kept alive for mmap access */
+    
+    /* F16 conversion buffer: F32/BF16 tensors converted to F16 at load time */
+    uint16_t *f16_conv_buf;
+    uint64_t f16_conv_size;
 } ds4_model;
 
 static uint64_t scalar_value_size(uint32_t type) {
@@ -1848,6 +1852,8 @@ static void model_close(ds4_model *m) {
         sst_sharded_model_free((sst_sharded_model *)m->shard_models);
         m->shard_models = NULL;
     }
+    /* Free F16 conversion buffer */
+    free(m->f16_conv_buf);
     memset(m, 0, sizeof(*m));
     m->fd = -1;
 }
@@ -5612,6 +5618,19 @@ static void matvec_f8e4m3_dispatch(ds4_gpu_tensor *out, const ds4_gpu_tensor *x,
 }
 
 /* Weight type dispatch — selects NVFP4/FP8/Q8_0 based on tensor type */
+/* Helper: dispatch GPU matmul based on weight tensor type.
+ * Uses weight->type to select the right kernel (NVFP4, F8_E4M3, F16, etc.). */
+static inline bool gpu_matmul_tensor(
+    ds4_gpu_tensor       *out,
+    const ds4_model      *model,
+    const ds4_tensor     *weight,
+    const ds4_gpu_tensor *x,
+    uint64_t              n_tok) {
+    return matmul_weight_dispatch(out, model->map, model->size,
+        weight->abs_offset, weight->dim[0], weight->dim[1],
+        x, n_tok, weight->type) != 0;
+}
+
 static int matmul_weight_dispatch(
     ds4_gpu_tensor       *out,
     const void             *model_map,
@@ -5629,6 +5648,16 @@ static int matmul_weight_dispatch(
     case DS4_TENSOR_F8_E4M3:
         return ds4_gpu_matmul_f8e4m3_tensor(out, model_map, model_size,
                                              weight_offset, in_dim, out_dim, x, n_tok);
+    case DS4_TENSOR_F16:
+    case DS4_TENSOR_BF16:
+        return ds4_gpu_matmul_f16_tensor(out, model_map, model_size,
+                                          weight_offset, in_dim, out_dim, x, n_tok);
+    case DS4_TENSOR_F32:
+        /* F32 data: use F16 kernel with half-size stride (F32 is 2x F16).
+         * The kernel reads 2-byte values from 4-byte data, giving wrong results.
+         * For now, convert F32 to F16 at GPU copy time. */
+        return ds4_gpu_matmul_f16_tensor(out, model_map, model_size,
+                                          weight_offset, in_dim, out_dim, x, n_tok);
     default:
         /* Fallback to Q8_0 */
         return ds4_gpu_matmul_q8_0_tensor(out, model_map, model_size,
@@ -16747,14 +16776,15 @@ static bool metal_graph_encode_output_head(
         uint64_t               vocab_dim) {
     const uint64_t hc_dim = (uint64_t)DS4_N_HC * DS4_N_EMBD;
     bool ok = ds4_gpu_rms_norm_plain_tensor(g->flat_hc, g->cur_hc, (uint32_t)hc_dim, DS4_RMS_EPS) != 0;
-    if (ok) ok = ds4_gpu_matmul_f16_tensor(g->output_pre,
+    if (ok) ok = ds4_gpu_matmul_tensor(g->output_pre,
                                              model->map,
                                              model->size,
                                              weights->output_hc_fn->abs_offset,
                                              hc_dim,
                                              DS4_N_HC,
                                              g->flat_hc,
-                                             1) != 0;
+                                             1,
+                                             weights->output_hc_fn->type) != 0;
     if (ok) {
         metal_graph_debug_dump_tensor("result_hc_pre", g->output_pre, DS4_N_HC, DS4_N_LAYER, 0);
     }
@@ -16847,14 +16877,15 @@ static bool metal_graph_encode_output_head_batch(
                                                       (uint32_t)hc_dim,
                                                       n_tokens,
                                                       DS4_RMS_EPS) != 0;
-    if (ok) ok = ds4_gpu_matmul_f16_tensor(output_pre,
+    if (ok) ok = ds4_gpu_matmul_tensor(output_pre,
                                              model->map,
                                              model->size,
                                              weights->output_hc_fn->abs_offset,
                                              hc_dim,
                                              DS4_N_HC,
                                              g->batch_flat_hc,
-                                             n_tokens) != 0;
+                                             n_tokens,
+                                             weights->output_hc_fn->type) != 0;
     if (ok) ok = ds4_gpu_output_hc_weights_tensor(output_weights,
                                                     output_pre,
                                                     model->map,
@@ -17872,14 +17903,15 @@ static bool metal_graph_warmup_prefill_kernels(
 
     bool ok = ds4_gpu_begin_commands() != 0;
     if (ok) {
-        ok = ds4_gpu_matmul_f16_tensor(g->batch_hc_mix,
+        ok = ds4_gpu_matmul_tensor(g->batch_hc_mix,
                                          model->map,
                                          model->size,
                                          weights->layer[0].hc_attn_fn->abs_offset,
                                          hc_dim,
                                          mix_hc,
                                          g->batch_flat_hc,
-                                         n_tokens) != 0;
+                                         n_tokens,
+                                         weights->layer[0].hc_attn_fn->type) != 0;
     }
     if (ok) ok = ds4_gpu_end_commands() != 0;
     if (!ok) {
@@ -18044,14 +18076,15 @@ static bool metal_graph_encode_layer_attention_batch(
                                                       (uint32_t)hc_dim,
                                                       n_tokens,
                                                       DS4_RMS_EPS) != 0;
-    if (ok) ok = ds4_gpu_matmul_f16_tensor(hc_mix_view,
+    if (ok) ok = ds4_gpu_matmul_tensor(hc_mix_view,
                                              model->map,
                                              model->size,
                                              layer->hc_attn_fn->abs_offset,
                                              hc_dim,
                                              mix_hc,
                                              g->batch_flat_hc,
-                                             n_tokens) != 0;
+                                             n_tokens,
+                                             layer->hc_attn_fn->type) != 0;
     if (metal_graph_use_reference_hc_decode()) {
         if (ok) ok = ds4_gpu_hc_split_sinkhorn_tensor(hc_split_view,
                                                         hc_mix_view,
@@ -19494,14 +19527,15 @@ static bool metal_graph_encode_layer_ffn_batch(
                                                       (uint32_t)hc_dim,
                                                       n_tokens,
                                                       DS4_RMS_EPS) != 0;
-    if (ok) ok = ds4_gpu_matmul_f16_tensor(hc_mix_view,
+    if (ok) ok = ds4_gpu_matmul_tensor(hc_mix_view,
                                              model->map,
                                              model->size,
                                              layer->hc_ffn_fn->abs_offset,
                                              hc_dim,
                                              mix_hc,
                                              g->batch_flat_hc,
-                                             n_tokens) != 0;
+                                             n_tokens,
+                                             layer->hc_ffn_fn->type) != 0;
     if (metal_graph_use_reference_hc_decode()) {
         if (ok) ok = ds4_gpu_hc_split_sinkhorn_tensor(hc_split_view,
                                                         hc_mix_view,
@@ -19567,14 +19601,15 @@ static bool metal_graph_encode_layer_ffn_batch(
                                       (uint64_t)n_tokens * DS4_N_EMBD, il, pos0);
     }
     DS4_METAL_PROFILE_FFN_STAGE("norm");
-    if (ok) ok = ds4_gpu_matmul_f16_tensor(g->batch_router_logits,
+    if (ok) ok = ds4_gpu_matmul_tensor(g->batch_router_logits,
                                              model->map,
                                              model->size,
                                              layer->ffn_gate_inp->abs_offset,
                                              DS4_N_EMBD,
                                              DS4_N_EXPERT,
                                              g->batch_ffn_norm,
-                                             n_tokens) != 0;
+                                             n_tokens,
+                                             layer->ffn_gate_inp->type) != 0;
 
     if (ok) ok = ds4_gpu_router_select_batch_tensor(g->batch_router_selected,
                                                       g->batch_router_weights,
