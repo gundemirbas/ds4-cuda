@@ -2265,35 +2265,17 @@ static bool model_open_safetensors(ds4_model *m, const char *model_dir,
                     
                     if (exp_dim0 == 0) continue; /* Should not happen */
                     
-                    /* Create virtual ffn_gate_exps (w1) */
+                    /* Create virtual ffn_gate_exps (w1) — GGUF expects 3D: [n_experts, expert_dim, hidden_dim] */
                     {
                         char vname[128];
                         snprintf(vname, sizeof(vname), "blk.%d.ffn_gate_exps.weight", l);
                         ds4_tensor *vt = &m->tensors[vi++];
                         vt->type = DS4_TENSOR_NVFP4;
-                        vt->ndim = 2;
-                        vt->dim[0] = (uint64_t)n_exp * exp_dim0;
-                        vt->dim[1] = exp_dim1;
-                        vt->elements = vt->dim[0] * vt->dim[1];
-                        /* Calculate bytes: NVFP4 uses 2 nibbles per byte + scales */
-                        uint64_t w_bytes = (exp_dim0 * exp_dim1 / 2) * n_exp;
-                        uint64_t s_bytes = (exp_dim0 * exp_dim1 / 16) * n_exp;
-                        vt->bytes = w_bytes + s_bytes;
-                        vt->abs_offset = 0; /* Virtual tensor, no single file offset */
-                        vt->rel_offset = 0;
-                        vt->name.len = strlen(vname);
-                        vt->name.ptr = strdup(vname);
-                    }
-                    /* Create virtual ffn_up_exps (w3) */
-                    {
-                        char vname[128];
-                        snprintf(vname, sizeof(vname), "blk.%d.ffn_up_exps.weight", l);
-                        ds4_tensor *vt = &m->tensors[vi++];
-                        vt->type = DS4_TENSOR_NVFP4;
-                        vt->ndim = 2;
-                        vt->dim[0] = (uint64_t)n_exp * exp_dim0;
-                        vt->dim[1] = exp_dim1;
-                        vt->elements = vt->dim[0] * vt->dim[1];
+                        vt->ndim = 3;
+                        vt->dim[0] = (uint64_t)n_exp;
+                        vt->dim[1] = exp_dim0;
+                        vt->dim[2] = exp_dim1;
+                        vt->elements = (uint64_t)n_exp * exp_dim0 * exp_dim1;
                         uint64_t w_bytes = (exp_dim0 * exp_dim1 / 2) * n_exp;
                         uint64_t s_bytes = (exp_dim0 * exp_dim1 / 16) * n_exp;
                         vt->bytes = w_bytes + s_bytes;
@@ -2302,16 +2284,36 @@ static bool model_open_safetensors(ds4_model *m, const char *model_dir,
                         vt->name.len = strlen(vname);
                         vt->name.ptr = strdup(vname);
                     }
-                    /* Create virtual ffn_down_exps (w2) */
+                    /* Create virtual ffn_up_exps (w3) — GGUF expects 3D: [n_experts, expert_dim, hidden_dim] */
+                    {
+                        char vname[128];
+                        snprintf(vname, sizeof(vname), "blk.%d.ffn_up_exps.weight", l);
+                        ds4_tensor *vt = &m->tensors[vi++];
+                        vt->type = DS4_TENSOR_NVFP4;
+                        vt->ndim = 3;
+                        vt->dim[0] = (uint64_t)n_exp;
+                        vt->dim[1] = exp_dim0;
+                        vt->dim[2] = exp_dim1;
+                        vt->elements = (uint64_t)n_exp * exp_dim0 * exp_dim1;
+                        uint64_t w_bytes = (exp_dim0 * exp_dim1 / 2) * n_exp;
+                        uint64_t s_bytes = (exp_dim0 * exp_dim1 / 16) * n_exp;
+                        vt->bytes = w_bytes + s_bytes;
+                        vt->abs_offset = 0;
+                        vt->rel_offset = 0;
+                        vt->name.len = strlen(vname);
+                        vt->name.ptr = strdup(vname);
+                    }
+                    /* Create virtual ffn_down_exps (w2) — GGUF expects 3D: [n_experts, hidden_dim, expert_dim] */
                     {
                         char vname[128];
                         snprintf(vname, sizeof(vname), "blk.%d.ffn_down_exps.weight", l);
                         ds4_tensor *vt = &m->tensors[vi++];
                         vt->type = DS4_TENSOR_NVFP4;
-                        vt->ndim = 2;
-                        vt->dim[0] = exp_dim1;
-                        vt->dim[1] = (uint64_t)n_exp * exp_dim0;
-                        vt->elements = vt->dim[0] * vt->dim[1];
+                        vt->ndim = 3;
+                        vt->dim[0] = (uint64_t)n_exp;
+                        vt->dim[1] = exp_dim1;
+                        vt->dim[2] = exp_dim0;
+                        vt->elements = (uint64_t)n_exp * exp_dim1 * exp_dim0;
                         uint64_t w_bytes = (exp_dim1 * exp_dim0 / 2) * n_exp;
                         uint64_t s_bytes = (exp_dim1 * exp_dim0 / 16) * n_exp;
                         vt->bytes = w_bytes + s_bytes;
