@@ -5896,10 +5896,8 @@ static void matmul_q8_0_pair_batch_prequant(
  * weight rows once per output channel. */
 /* ds4-cuda: Type-aware batch matmul — dispatches based on weight type.
  * For Q8_0 (type 8): uses Q8_0 quantization path.
- * For F8_E4M3 (type 34): uses F8_E4M3 kernel via ds4_gpu_matmul_tensor.
- * For F16/BF16 (types 1/33): uses F16 kernel.
- * For F32 (type 0): uses F32 kernel.
- * For NVFP4 (type 35): uses NVFP4 kernel.
+ * For other types: delegates to ds4_gpu_matmul_tensor which handles
+ * F8_E4M3, NVFP4, BF16, F16, F32 dispatch on GPU.
  */
 static void matmul_tensor_batch(
         float           * out,
@@ -5913,24 +5911,27 @@ static void matmul_tensor_batch(
 
     /* For Q8_0, use the optimized Q8_0 path */
     if (w->type == 8) {
-    ds4_gpu_tensor gx = {0};
-    gx.ptr = (void *)x;
-    gx.bytes = (uint64_t)n_tok * in_dim * sizeof(float);
-    gx.ndim = 2;
-    gx.dim[0] = n_tok;
-    gx.dim[1] = in_dim;
-    gx.dtype = 0; /* F32 */
-    ds4_gpu_tensor gout = {0};
-    gout.ptr = out;
-    gout.bytes = (uint64_t)n_tok * out_dim * sizeof(float);
-    gout.ndim = 2;
-    gout.dim[0] = n_tok;
-    gout.dim[1] = out_dim;
-    gout.dtype = 0; /* F32 */
-    if (!ds4_gpu_matmul_tensor(&gout, m->map, m->size, w->abs_offset,
-                                in_dim, out_dim, &gx, n_tok, w->type)) {
+        matmul_q8_0_batch(out, m, w, x, n_tok);
+        return;
+    }
+
+    /* For non-Q8_0 types, delegate to GPU matmul dispatch */
+    ds4_gpu_tensor *gx = ds4_gpu_tensor_alloc((uint64_t)n_tok * in_dim * sizeof(float));
+    ds4_gpu_tensor *gout = ds4_gpu_tensor_alloc((uint64_t)n_tok * out_dim * sizeof(float));
+    if (!gx || !gout) {
+        fprintf(stderr, "ds4: matmul_tensor_batch: tensor alloc failed\n");
+        ds4_gpu_tensor_free(gx);
+        ds4_gpu_tensor_free(gout);
+        return;
+    }
+    ds4_gpu_tensor_write(gx, 0, x, (uint64_t)n_tok * in_dim * sizeof(float));
+    if (!ds4_gpu_matmul_tensor(gout, m->map, m->size, w->abs_offset,
+                                in_dim, out_dim, gx, n_tok, w->type)) {
         fprintf(stderr, "ds4: matmul_tensor_batch failed for type=%u\n", w->type);
     }
+    ds4_gpu_tensor_read(gout, 0, out, (uint64_t)n_tok * out_dim * sizeof(float));
+    ds4_gpu_tensor_free(gx);
+    ds4_gpu_tensor_free(gout);
 }
 
 static void matmul_q8_0_batch(
