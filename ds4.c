@@ -18169,6 +18169,12 @@ static bool metal_graph_encode_layer_attention_batch(
     }
     DS4_METAL_PROFILE_ATTN_STAGE("hc_pre");
     if (ok && !fuse_hc_norm) {
+        /* Catch any stale error from previous kernels */
+        cudaError_t sync_err = cudaDeviceSynchronize();
+        if (sync_err != cudaSuccess) {
+            fprintf(stderr, "ds4: STALE ERROR before rms_norm at layer %u: %s\n", il, cudaGetErrorString(sync_err));
+            (void)cudaGetLastError();
+        }
         ok = ds4_gpu_rms_norm_weight_rows_tensor(g->batch_attn_norm,
                                                   g->batch_attn_cur,
                                                   model->map,
