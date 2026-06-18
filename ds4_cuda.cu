@@ -2756,7 +2756,9 @@ extern "C" int ds4_gpu_cache_model_range(const void *model_map, uint64_t model_s
     if (!ptr || !cuda_model_range_is_cached(model_map, offset, bytes)) {
         if (!g_model_mapping_failure_notice_printed) {
             fprintf(stderr,
-                    "ds4: CUDA failed to prepare model tensor spans for device access\n");
+                    "ds4: CUDA failed to prepare model tensor spans for device access"
+                    " (g_model_range_bytes=%.2f GiB)\n",
+                    (double)g_model_range_bytes / 1073741824.0);
             g_model_mapping_failure_notice_printed = 1;
         }
         return 0;
@@ -12491,6 +12493,10 @@ static int routed_moe_launch(
         uint32_t tile_capacity = 0;
         uint32_t tile16_capacity = 0;
         dim3 xq_grid(xq_blocks, n_tokens, 1);
+        if (getenv("DS4_CUDA_DEBUG_MOE") != NULL) {
+            fprintf(stderr, "ds4: DBG moe xq=%p xptr=%p dim=%u ntok=%u\n",
+                    (void*)xq, (const void*)x->ptr, expert_in_dim, n_tokens);
+        }
         q8_K_quantize_kernel<<<xq_grid, 256>>>(xq, (const float *)x->ptr, expert_in_dim, n_tokens);
         ok = cuda_ok(cudaGetLastError(), "routed_moe x quantize launch");
         if (prof_ev[1]) (void)cudaEventRecord(prof_ev[1], 0);
