@@ -2599,15 +2599,14 @@ extern "C" int ds4_gpu_set_model_map(const void *model_map, uint64_t model_size)
     } else {
         fprintf(stderr, "ds4: CUDA host registration skipped: %s\n", cudaGetErrorString(err));
         (void)cudaGetLastError();
-        const uint64_t limit = cuda_model_local_model_limit_bytes();
-        if (!cuda_model_cache_limit_explicit() && model_size > limit) {
-            fprintf(stderr,
-                    "ds4: CUDA model %.2f GiB exceeds the default single-GPU "
-                    "startup cache budget %.2f GiB; use distributed layer "
-                    "loading or set DS4_CUDA_WEIGHT_CACHE_LIMIT_GB explicitly\n",
-                    (double)model_size / 1073741824.0,
-                    (double)limit / 1073741824.0);
-            return 0;
+        /* ds4-cuda: When cudaHostRegister fails (e.g. MAP_ANONYMOUS mmap),
+         * GPU kernels can still read from the mmap via UVA (proven by
+         * matmul_f32_kernel working). Enable hmm_direct so
+         * cuda_model_range_ptr returns raw pointers for kernel reads,
+         * and skip the Q8/fd/register cache paths which need cudaMemcpy. */
+        g_model_hmm_direct = 1;
+        fprintf(stderr, "ds4: CUDA enabling direct kernel mmap access (hmm_direct)\n");
+        return 1;
         }
     }
     return 1;
