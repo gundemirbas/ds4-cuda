@@ -28887,6 +28887,7 @@ static sst_dtype parse_dtype(const char *s) {
     if (strcmp(s, "F8_E4M3") == 0 || strcmp(s, "fp8") == 0)   return SST_DTYPE_F8_E4M3;
     if (strcmp(s, "NVFP4") == 0 || strcmp(s, "nve4") == 0)    return SST_DTYPE_NVFP4;
     if (strcmp(s, "MXFP4") == 0 || strcmp(s, "mxfp4") == 0)   return SST_DTYPE_MXFP4;
+    if (strcmp(s, "U8") == 0 || strcmp(s, "uint8") == 0)      return SST_DTYPE_NVFP4;
     return SST_DTYPE_UNKNOWN;
 }
 
