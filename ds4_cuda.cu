@@ -2607,7 +2607,6 @@ extern "C" int ds4_gpu_set_model_map(const void *model_map, uint64_t model_size)
         g_model_hmm_direct = 1;
         fprintf(stderr, "ds4: CUDA enabling direct kernel mmap access (hmm_direct)\n");
         return 1;
-        }
     }
     return 1;
 }
