@@ -3769,7 +3769,13 @@ static void tensor_expect_f16_or_q8_0_layout(
 static bool tensor_is_routed_expert_type(uint32_t type) {
     return type == DS4_TENSOR_IQ2_XXS ||
            type == DS4_TENSOR_Q2_K ||
-           type == DS4_TENSOR_Q4_K;
+           type == DS4_TENSOR_Q4_K ||
+           type == DS4_TENSOR_NVFP4 ||
+           type == DS4_TENSOR_F8_E4M3 ||
+           type == DS4_TENSOR_MXFP4 ||
+           type == DS4_TENSOR_BF16 ||
+           type == DS4_TENSOR_F16 ||
+           type == DS4_TENSOR_F32;
 }
 
 static DS4_MAYBE_UNUSED uint64_t routed_expert_block_bytes(uint32_t type) {
