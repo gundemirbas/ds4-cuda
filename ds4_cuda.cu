@@ -8128,6 +8128,10 @@ extern "C" int ds4_gpu_rms_norm_weight_tensor(ds4_gpu_tensor *out, const ds4_gpu
     (void)cudaGetLastError();
     rms_norm_weight_kernel<<<1, 256>>>((float *)out->ptr, (const float *)x->ptr, d_w, n, 1, eps);
     cudaError_t launch_err = cudaDeviceSynchronize();
+    if (launch_err != cudaSuccess) {
+        fprintf(stderr, "ds4: rms_norm_weight FAILED: n=%u out_ptr=%p x_ptr=%p w_ptr=%p err=%s\n",
+                n, out->ptr, x->ptr, d_w, cudaGetErrorString(launch_err));
+    }
     int ok = cuda_ok(launch_err, "rms_norm_weight sync");
     cudaFree(d_w);
     return ok;
@@ -8151,6 +8155,10 @@ extern "C" int ds4_gpu_rms_norm_weight_rows_tensor(ds4_gpu_tensor *out, const ds
     (void)cudaGetLastError();
     rms_norm_weight_kernel<<<rows, 256>>>((float *)out->ptr, (const float *)x->ptr, d_w, n, rows, eps);
     cudaError_t launch_err = cudaDeviceSynchronize();
+    if (launch_err != cudaSuccess) {
+        fprintf(stderr, "ds4: rms_norm_weight_rows FAILED: rows=%u n=%u out_ptr=%p x_ptr=%p w_ptr=%p err=%s\n",
+                rows, n, out->ptr, x->ptr, d_w, cudaGetErrorString(launch_err));
+    }
     int ok = cuda_ok(launch_err, "rms_norm_weight_rows sync");
     cudaFree(d_w);
     return ok;
