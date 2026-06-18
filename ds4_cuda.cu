@@ -8113,8 +8113,16 @@ extern "C" int ds4_gpu_rms_norm_weight_tensor(ds4_gpu_tensor *out, const ds4_gpu
     const char *wptr = cuda_model_range_ptr(model_map, weight_offset, (uint64_t)n * sizeof(float), "rms_weight");
     if (!wptr) return 0;
     const float *w = (const float *)wptr;
-    rms_norm_weight_kernel<<<1, 256>>>((float *)out->ptr, (const float *)x->ptr, w, n, 1, eps);
-    return cuda_ok(cudaGetLastError(), "rms_norm_weight launch");
+    /* Copy small RMS norm weights to GPU — UVA pointers from mmap may not
+     * be accessible from all kernel address spaces. */
+    float *d_w = NULL;
+    const size_t w_bytes = (size_t)n * sizeof(float);
+    if (cudaMalloc(&d_w, w_bytes) != cudaSuccess) return 0;
+    cudaMemcpy(d_w, w, w_bytes, cudaMemcpyHostToDevice);
+    rms_norm_weight_kernel<<<1, 256>>>((float *)out->ptr, (const float *)x->ptr, d_w, n, 1, eps);
+    int ok = cuda_ok(cudaGetLastError(), "rms_norm_weight launch");
+    cudaFree(d_w);
+    return ok;
 }
 extern "C" int ds4_gpu_rms_norm_weight_rows_tensor(ds4_gpu_tensor *out, const ds4_gpu_tensor *x, const void *model_map, uint64_t model_size, uint64_t weight_offset, uint32_t n, uint32_t rows, float eps) {
     if (!out || !x || !model_map || weight_offset > model_size ||
@@ -8124,8 +8132,14 @@ extern "C" int ds4_gpu_rms_norm_weight_rows_tensor(ds4_gpu_tensor *out, const ds
     const char *wptr = cuda_model_range_ptr(model_map, weight_offset, (uint64_t)n * sizeof(float), "rms_weight");
     if (!wptr) return 0;
     const float *w = (const float *)wptr;
-    rms_norm_weight_kernel<<<rows, 256>>>((float *)out->ptr, (const float *)x->ptr, w, n, rows, eps);
-    return cuda_ok(cudaGetLastError(), "rms_norm_weight launch");
+    float *d_w = NULL;
+    const size_t w_bytes = (size_t)n * sizeof(float);
+    if (cudaMalloc(&d_w, w_bytes) != cudaSuccess) return 0;
+    cudaMemcpy(d_w, w, w_bytes, cudaMemcpyHostToDevice);
+    rms_norm_weight_kernel<<<rows, 256>>>((float *)out->ptr, (const float *)x->ptr, d_w, n, rows, eps);
+    int ok = cuda_ok(cudaGetLastError(), "rms_norm_weight launch");
+    cudaFree(d_w);
+    return ok;
 }
 extern "C" int ds4_gpu_dsv4_qkv_rms_norm_rows_tensor(
         ds4_gpu_tensor       *q_out,
@@ -8157,19 +8171,34 @@ extern "C" int ds4_gpu_dsv4_qkv_rms_norm_rows_tensor(
         const float *kv_w = (const float *)cuda_model_range_ptr(model_map,
                 kv_weight_offset, (uint64_t)kv_n * sizeof(float), "kv_rms_weight");
         if (!q_w || !kv_w) return 0;
+        /* Copy small RMS norm weights to GPU — UVA pointers from mmap may not
+         * be accessible from all kernel address spaces. */
+        float *d_q_w = NULL, *d_kv_w = NULL;
+        const size_t q_w_bytes = (size_t)q_n * sizeof(float);
+        const size_t kv_w_bytes = (size_t)kv_n * sizeof(float);
+        if (cudaMalloc(&d_q_w, q_w_bytes) != cudaSuccess ||
+            cudaMalloc(&d_kv_w, kv_w_bytes) != cudaSuccess) {
+            cudaFree(d_q_w); cudaFree(d_kv_w);
+            return 0;
+        }
+        cudaMemcpy(d_q_w, q_w, q_w_bytes, cudaMemcpyHostToDevice);
+        cudaMemcpy(d_kv_w, kv_w, kv_w_bytes, cudaMemcpyHostToDevice);
         dim3 grid(rows, 2u, 1u);
         dsv4_qkv_rms_norm_rows_kernel<<<grid, 256>>>(
                 (float *)q_out->ptr,
                 (const float *)q->ptr,
-                q_w,
+                d_q_w,
                 q_n,
                 (float *)kv_out->ptr,
                 (const float *)kv->ptr,
-                kv_w,
+                d_kv_w,
                 kv_n,
                 rows,
                 eps);
-        return cuda_ok(cudaGetLastError(), "dsv4 qkv rms norm rows launch");
+        int ok = cuda_ok(cudaGetLastError(), "dsv4 qkv rms norm rows launch");
+        cudaFree(d_q_w);
+        cudaFree(d_kv_w);
+        return ok;
     }
     return ds4_gpu_rms_norm_weight_rows_tensor(q_out, q, model_map, model_size,
                                                  q_weight_offset, q_n, rows, eps) &&
