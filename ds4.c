@@ -2317,8 +2317,8 @@ static bool model_open_safetensors(ds4_model *m, const char *model_dir,
         /* Check if output_norm.weight exists in m->tensors */
         int found = 0;
         for (uint64_t i = 0; i < m->n_tensors; i++) {
-            if (m->tensors[i].name.len == 22 &&
-                memcmp(m->tensors[i].name.ptr, "output_norm.weight", 22) == 0) {
+            if (m->tensors[i].name.len == 18 &&
+                memcmp(m->tensors[i].name.ptr, "output_norm.weight", 18) == 0) {
                 found = 1;
                 break;
             }
@@ -2342,7 +2342,7 @@ static bool model_open_safetensors(ds4_model *m, const char *model_dir,
                 vt->abs_offset = 0;
                 vt->rel_offset = 0;
                 vt->name.ptr = strdup("output_norm.weight");
-                vt->name.len = 22;
+                vt->name.len = 18;
             }
         }
     }
