@@ -952,7 +952,8 @@ static int cuda_model_prefetch_range(const void *model_map, uint64_t model_size,
             "ds4: CUDA ATS/HMM prefetch queued %.2f GiB of model tensors in %.3fs\n",
             (double)map_size / 1073741824.0,
             t1 - t0);
-    g_model_hmm_direct = 1;
+    /* Do NOT set g_model_hmm_direct — prefetch does not guarantee GPU
+     * can read unregistered host memory on GB10. */
     return 1;
 }
 
@@ -2616,13 +2617,10 @@ extern "C" int ds4_gpu_set_model_map(const void *model_map, uint64_t model_size)
     } else {
         fprintf(stderr, "ds4: CUDA host registration skipped: %s\n", cudaGetErrorString(err));
         (void)cudaGetLastError();
-        /* ds4-cuda: When cudaHostRegister fails (e.g. MAP_ANONYMOUS mmap),
-         * GPU kernels can still read from the mmap via UVA (proven by
-         * matmul_f32_kernel working). Enable hmm_direct so
-         * cuda_model_range_ptr returns raw pointers for kernel reads,
-         * and skip the Q8/fd/register cache paths which need cudaMemcpy. */
-        g_model_hmm_direct = 1;
-        fprintf(stderr, "ds4: CUDA enabling direct kernel mmap access (hmm_direct)\n");
+        /* ds4-cuda: Registration failed. Do NOT set hmm_direct — on GB10,
+         * unregistered host memory (e.g. MAP_ANONYMOUS) is not accessible
+         * from GPU kernels. Leave g_model_hmm_direct = 0 so that the
+         * fd-based or GPU cache copy paths are used instead. */
         return 1;
     }
     return 1;
