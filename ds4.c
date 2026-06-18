@@ -18101,6 +18101,10 @@ static bool metal_graph_encode_layer_attention_batch(
     ds4_gpu_tensor *after_attn_hc_view = ds4_gpu_tensor_view(
             g->batch_after_attn_hc, 0, (uint64_t)n_tokens * hc_dim * sizeof(float));
     bool ok = hc_mix_view && hc_split_view && attn_cur_view && after_attn_hc_view;
+    /* Catch any stale error from previous layer */
+    if (ok && ds4_gpu_synchronize() != 0) {
+        fprintf(stderr, "ds4: STALE ERROR at START of attn_batch layer %u\n", il);
+    }
     const bool fuse_hc_norm = DS4_N_HC == 4 &&
                               !metal_graph_use_reference_hc_decode() &&
                               metal_graph_enable_batch_hc_norm_fusion();
