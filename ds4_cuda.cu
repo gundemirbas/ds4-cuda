@@ -12251,7 +12251,8 @@ static int routed_moe_launch(
         return 0;
     }
     const int q4k_path = (gate_type == 12u && down_type == 12u);
-    if (!q4k_path && (gate_type != 16u || down_type != 10u)) return 0;
+    const int nvfp4_path = (gate_type == 35u || gate_type == 34u || gate_type == 33u || gate_type == 1u);
+    if (!q4k_path && !nvfp4_path && (gate_type != 16u || down_type != 10u)) return 0;
     const uint64_t gate_bytes = (uint64_t)n_total_expert * gate_expert_bytes;
     const uint64_t down_bytes = (uint64_t)n_total_expert * down_expert_bytes;
     if (gate_bytes > model_size - gate_offset ||

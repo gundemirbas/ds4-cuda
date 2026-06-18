@@ -19509,7 +19509,7 @@ static bool metal_graph_encode_layer_ffn_batch(
     ds4_gpu_tensor *next_hc_view = ds4_gpu_tensor_view(
             g->batch_next_hc, 0, (uint64_t)n_tokens * hc_dim * sizeof(float));
     bool ok = hc_mix_view && hc_split_view && ffn_cur_view && next_hc_view;
-    if (!ok) { fprintf(stderr, "ds4: FFN batch: view alloc failed\n"); return false; }
+    if (!ok) return false;
     const bool fuse_hc_norm = DS4_N_HC == 4 &&
                               !metal_graph_use_reference_hc_decode() &&
                               metal_graph_enable_batch_hc_norm_fusion();
@@ -19527,7 +19527,6 @@ static bool metal_graph_encode_layer_ffn_batch(
                                              g->batch_flat_hc,
                                              n_tokens,
                                              layer->hc_ffn_fn->type) != 0;
-    if (!ok) fprintf(stderr, "ds4: FFN batch: hc_ffn_fn matmul failed (type=%u)\n", layer->hc_ffn_fn ? layer->hc_ffn_fn->type : 99);
     if (metal_graph_use_reference_hc_decode()) {
         if (ok) ok = ds4_gpu_hc_split_sinkhorn_tensor(hc_split_view,
                                                         hc_mix_view,
