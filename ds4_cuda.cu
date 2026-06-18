@@ -360,11 +360,6 @@ static const char *cuda_model_range_populate_device_copy(const void *model_map,
                                                           uint64_t offset,
                                                           uint64_t bytes,
                                                           const char *what) {
-    fprintf(stderr, "ds4: DBG populate_device_copy %s offset=%lu bytes=%.2fMiB model_map=%p\n",
-            what ? what : "weights",
-            (unsigned long)offset,
-            (double)bytes / 1048576.0,
-            model_map);
     const uint64_t limit = cuda_model_cache_limit_bytes();
     if (g_model_range_bytes > limit || bytes > limit - g_model_range_bytes) {
         if (getenv("DS4_CUDA_WEIGHT_CACHE_VERBOSE")) {
@@ -384,48 +379,48 @@ static const char *cuda_model_range_populate_device_copy(const void *model_map,
                 what ? what : "weights", (double)bytes / 1048576.0, cudaGetErrorString(err));
         return NULL;
     }
-    fprintf(stderr, "ds4: DBG cudaMalloc OK dev=%p\n", dev);
 
     const char *src = (const char *)model_map + offset;
-    /* Verify source address is readable */
-    {
-        volatile float test = 0.0f;
-        __sync_synchronize();
-        test = *(const volatile float *)src;
-        (void)test;
-        fprintf(stderr, "ds4: DBG source read OK at %p\n", src);
-    }
-    const uint64_t chunk = 64ull * 1024ull * 1024ull;
+    const uint64_t chunk = 256ull * 1024ull * 1024ull;
+    /* Persistent staging buffer for tmp-buf fallback (64 MiB) */
+    void *stage = NULL;
+    const uint64_t stage_size = 64ull * 1024ull * 1024ull;
     for (uint64_t done = 0; done < bytes; done += chunk) {
         uint64_t n = bytes - done < chunk ? bytes - done : chunk;
         /* Try cudaMemcpyDefault first (UVA path), fall back to temporary CPU buffer */
         err = cudaMemcpy((char *)dev + done, src + done, (size_t)n, cudaMemcpyDefault);
         if (err != cudaSuccess) {
-            /* Fallback: copy through a temporary CPU buffer */
-            fprintf(stderr, "ds4: DBG cudaMemcpyDefault failed: %s, trying tmp-buf fallback\n",
-                    cudaGetErrorString(err));
-            void *tmp = malloc((size_t)n);
-            if (!tmp) {
-                fprintf(stderr, "ds4: CUDA model range tmp alloc failed\n");
-                (void)cudaFree(dev);
-                return NULL;
+            /* Fallback: copy through a persistent staging buffer */
+            if (!stage) {
+                stage = malloc(stage_size);
+                if (!stage) {
+                    fprintf(stderr, "ds4: CUDA model range stage alloc failed\n");
+                    (void)cudaFree(dev);
+                    return NULL;
+                }
             }
-            memcpy(tmp, src + done, (size_t)n);
-            err = cudaMemcpy((char *)dev + done, tmp, (size_t)n, cudaMemcpyHostToDevice);
-            free(tmp);
-            if (err != cudaSuccess) {
-                fprintf(stderr, "ds4: CUDA model range copy failed for %s at %.2f/%.2f MiB: %s\n",
-                        what ? what : "weights",
-                        (double)done / 1048576.0,
-                        (double)bytes / 1048576.0,
-                        cudaGetErrorString(err));
-                (void)cudaFree(dev);
-                (void)cudaGetLastError();
-                return NULL;
+            uint64_t remain = n;
+            uint64_t sub_done = 0;
+            while (remain > 0) {
+                uint64_t sub = remain < stage_size ? remain : stage_size;
+                memcpy((char *)stage, src + done + sub_done, sub);
+                err = cudaMemcpy((char *)dev + done + sub_done, stage, sub, cudaMemcpyHostToDevice);
+                if (err != cudaSuccess) {
+                    fprintf(stderr, "ds4: CUDA model range copy failed for %s at %.2f/%.2f MiB: %s\n",
+                            what ? what : "weights",
+                            (double)(done + sub_done) / 1048576.0,
+                            (double)bytes / 1048576.0,
+                            cudaGetErrorString(err));
+                    (void)cudaFree(dev);
+                    if (stage) free(stage);
+                    return NULL;
+                }
+                sub_done += sub;
+                remain -= sub;
             }
-            fprintf(stderr, "ds4: DBG tmp-buf fallback OK\n");
         }
     }
+    if (stage) free(stage);
     g_model_ranges.push_back({model_map, offset, bytes, (char *)dev, NULL, NULL, 0, 0, 0});
     g_model_range_by_offset[offset] = g_model_ranges.size() - 1u;
     g_model_range_bytes += bytes;
@@ -474,20 +469,15 @@ static const char *cuda_model_range_ptr(const void *model_map, uint64_t offset, 
     const char *direct_env = getenv("DS4_CUDA_DIRECT_MODEL");
     if (direct_env && direct_env[0]) return cuda_model_ptr(model_map, offset);
 
-    fprintf(stderr, "ds4: DBG range_ptr offset=%lu bytes=%.2fMiB what=%s hmm_direct=%d fd=%d\n",
-            (unsigned long)offset, (double)bytes / 1048576.0,
-            what ? what : "NULL", g_model_hmm_direct, g_model_fd);
     if (getenv("DS4_CUDA_NO_FD_CACHE") == NULL) {
         const char *fd_ptr = cuda_model_range_ptr_from_fd(model_map, offset, bytes, what);
-        if (fd_ptr) { fprintf(stderr, "ds4: DBG fd_ptr OK\n"); return fd_ptr; }
-        fprintf(stderr, "ds4: DBG fd_ptr FAIL\n");
+        if (fd_ptr) return fd_ptr;
     }
 
     const char *mapped = cuda_model_range_register_mapped(model_map, offset, bytes, what);
-    if (mapped) { fprintf(stderr, "ds4: DBG mapped OK\n"); return mapped; }
-    fprintf(stderr, "ds4: DBG mapped FAIL\n");
+    if (mapped) return mapped;
 
-    fprintf(stderr, "ds4: DBG trying populate_device_copy\n");
+
     return cuda_model_range_populate_device_copy(model_map, offset, bytes, what);
 }
 
