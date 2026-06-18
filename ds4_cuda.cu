@@ -8111,13 +8111,14 @@ extern "C" int ds4_gpu_rms_norm_weight_tensor(ds4_gpu_tensor *out, const ds4_gpu
         out->bytes < (uint64_t)n * sizeof(float) ||
         x->bytes < (uint64_t)n * sizeof(float)) return 0;
     const char *wptr = cuda_model_range_ptr(model_map, weight_offset, (uint64_t)n * sizeof(float), "rms_weight");
-    if (!wptr) return 0;
+    if (!wptr) { fprintf(stderr, "ds4: rms_norm_weight: wptr is NULL (offset=%lu, n=%u)\n", (unsigned long)weight_offset, n); return 0; }
     const float *w = (const float *)wptr;
     /* Copy small RMS norm weights to GPU — UVA pointers from mmap may not
      * be accessible from all kernel address spaces. */
     float *d_w = NULL;
     const size_t w_bytes = (size_t)n * sizeof(float);
-    if (cudaMalloc(&d_w, w_bytes) != cudaSuccess) return 0;
+    cudaError_t ce = cudaMalloc(&d_w, w_bytes);
+    if (ce != cudaSuccess) { fprintf(stderr, "ds4: rms_norm_weight: cudaMalloc failed: %s (n=%u, bytes=%zu)\n", cudaGetErrorString(ce), n, w_bytes); return 0; }
     /* Copy via CPU buffer: cudaMemcpy can't read mmap directly on GB10 */
     float *tmp = (float *)malloc(w_bytes);
     if (!tmp) { cudaFree(d_w); return 0; }
