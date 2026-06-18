@@ -2148,6 +2148,9 @@ static bool model_open_safetensors(ds4_model *m, const char *model_dir,
     m->shard_models = sst;  /* Keep sst alive — we own it now */
     
     /* Create virtual fused expert tensors for safetensors models.
+     * Also create virtual tensors for required tensors missing from safetensors
+     * (e.g., output_norm.weight which doesn't exist in DeepSeek-V4-Flash-NVFP4).
+     *
      * In GGUF, all 256 experts per layer are fused into one tensor (e.g.,
      * blk.0.ffn_gate_exps.weight shape [256*2048, 4096]). In safetensors,
      * each expert is stored separately (layers.0.ffn.experts.%d.w1.weight
@@ -2303,6 +2306,43 @@ static bool model_open_safetensors(ds4_model *m, const char *model_dir,
                         vt->name.ptr = strdup(vname);
                     }
                 }
+            }
+        }
+    }
+    
+    /* Create virtual tensors for required tensors missing from safetensors.
+     * DeepSeek-V4-Flash-NVFP4 doesn't have output_norm.weight.
+     * We create a virtual tensor so weights_bind can find it. */
+    {
+        /* Check if output_norm.weight exists in m->tensors */
+        int found = 0;
+        for (uint64_t i = 0; i < m->n_tensors; i++) {
+            if (m->tensors[i].name.len == 22 &&
+                memcmp(m->tensors[i].name.ptr, "output_norm.weight", 22) == 0) {
+                found = 1;
+                break;
+            }
+        }
+        if (!found) {
+            /* Create virtual output_norm.weight (F32, shape [4096]) */
+            uint64_t old_n = m->n_tensors;
+            uint64_t new_n = old_n + 1;
+            ds4_tensor *new_tensors = calloc(new_n, sizeof(ds4_tensor));
+            if (new_tensors) {
+                memcpy(new_tensors, m->tensors, old_n * sizeof(ds4_tensor));
+                free(m->tensors);
+                m->tensors = new_tensors;
+                m->n_tensors = new_n;
+                ds4_tensor *vt = &m->tensors[old_n];
+                vt->type = DS4_TENSOR_F32;
+                vt->ndim = 1;
+                vt->dim[0] = 4096; /* DS4_N_EMBD */
+                vt->elements = 4096;
+                vt->bytes = 4096 * sizeof(float);
+                vt->abs_offset = 0;
+                vt->rel_offset = 0;
+                vt->name.ptr = strdup("output_norm.weight");
+                vt->name.len = 22;
             }
         }
     }
