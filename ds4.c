@@ -2056,18 +2056,52 @@ static bool model_open_safetensors(ds4_model *m, const char *model_dir,
         return false;
     }
     
-    /* For now, use the first shard's mmap as the model map */
     if (sst->n_models == 0) {
         fprintf(stderr, "ds4: no safetensors shards found\n");
         sst_sharded_model_free(sst);
         return false;
     }
     
+    /* Create a unified virtual mmap covering all shard files contiguously.
+     * This allows abs_offset to be a global offset into a single mapping,
+     * which is what the GPU cache code expects (m->map + abs_offset). */
+    uint64_t total_size = 0;
+    for (uint64_t i = 0; i < sst->n_models; i++) {
+        total_size += sst->models[i]->file_size;
+    }
+    
+    /* Use mmap to create a virtual region covering all shards.
+     * We mmap the first shard at the base address (MAP_SHARED),
+     * then use MAP_FIXED to map subsequent shards at the right offset. */
+    void *virt_base = mmap(NULL, total_size, PROT_NONE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    if (virt_base == MAP_FAILED) {
+        fprintf(stderr, "ds4: failed to create virtual mmap region: %s\n", strerror(errno));
+        sst_sharded_model_free(sst);
+        return false;
+    }
+    
+    uint64_t virt_offset = 0;
+    for (uint64_t i = 0; i < sst->n_models; i++) {
+        sst_model *sm = sst->models[i];
+        void *target = (void *)((uintptr_t)virt_base + virt_offset);
+        void *mapped = mmap(target, sm->file_size, PROT_READ,
+                            MAP_FIXED | MAP_SHARED | MAP_POPULATE,
+                            sm->fd, 0);
+        if (mapped == MAP_FAILED) {
+            fprintf(stderr, "ds4: failed to mmap shard %" PRIu64 " at offset %" PRIu64 ": %s\n",
+                    i, virt_offset, strerror(errno));
+            munmap(virt_base, total_size);
+            sst_sharded_model_free(sst);
+            return false;
+        }
+        virt_offset += sm->file_size;
+    }
+    
     sst_model *first = sst->models[0];
     m->fd = first->fd;
-    m->map = first->map;
-    m->size = first->file_size;
-    /* Transfer ownership: prevent sst_sharded_model_free from munmap/closing the first shard */
+    m->map = (uint8_t *)virt_base;
+    m->size = total_size;
+    /* Transfer ownership: prevent sst_sharded_model_free from munmap/closing any shard */
     first->map = NULL;
     first->fd = -1;
     
@@ -2098,6 +2132,7 @@ static bool model_open_safetensors(ds4_model *m, const char *model_dir,
     }
     
     uint64_t ti = 0;
+    uint64_t shard_virt_offset = 0;
     for (uint64_t shard = 0; shard < sst->n_models; shard++) {
         sst_model *sm = sst->models[shard];
         for (uint64_t j = 0; j < sm->n_tensors; j++) {
@@ -2149,12 +2184,16 @@ static bool model_open_safetensors(ds4_model *m, const char *model_dir,
             }
             t->elements = elems;
             
-            /* Set offsets: abs_offset is file offset within the shard.
-             * For multi-shard access, the caller must know which shard.
-             * We store a sentinel so code can detect safetensors tensors. */
-            t->abs_offset = st->data_offset;
-            t->rel_offset = st->data_offset;
+            /* Set offsets: abs_offset is global offset into the unified virtual mmap.
+             * shard_virt_offset is this shard's base offset in the virtual mapping.
+             * st->data_offset is the offset within the shard file. */
+            t->abs_offset = shard_virt_offset + st->data_offset;
+            t->rel_offset = shard_virt_offset + st->data_offset;
             t->bytes = st->data_size;
+        }
+        /* Update shard_virt_offset for next shard */
+        if (shard + 1 < sst->n_models) {
+            shard_virt_offset += sm->file_size;
         }
     }
     
