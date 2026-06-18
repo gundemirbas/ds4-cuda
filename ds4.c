@@ -2071,8 +2071,7 @@ static bool model_open_safetensors(ds4_model *m, const char *model_dir,
     }
     
     /* Page-align total size for the anonymous reservation */
-    const uint64_t page_size = 4096;
-    uint64_t total_size_page = (total_size + page_size - 1) & ~(page_size - 1);
+    uint64_t total_size_page = (total_size + 4095) & ~(uint64_t)4095;
     
     /* Create a unified virtual mapping covering all shards contiguously.
      * We first reserve virtual address space with an anonymous mmap,
@@ -2087,11 +2086,10 @@ static bool model_open_safetensors(ds4_model *m, const char *model_dir,
     
     /* Page-align file sizes for offset computation */
     uint64_t virt_offset = 0;
-    const uint64_t page_size = 4096;
     for (uint64_t i = 0; i < sst->n_models; i++) {
         sst_model *sm = sst->models[i];
         /* Round file size up to page boundary for offset tracking */
-        uint64_t file_size_page = (sm->file_size + page_size - 1) & ~(page_size - 1);
+        uint64_t file_size_page = (sm->file_size + 4095) & ~(uint64_t)4095;
         void *target = (void *)((uintptr_t)virt_base + virt_offset);
         void *mapped = mmap(target, file_size_page, PROT_READ,
                             MAP_FIXED | MAP_SHARED,
@@ -2202,7 +2200,7 @@ static bool model_open_safetensors(ds4_model *m, const char *model_dir,
         }
         /* Update shard_virt_offset for next shard (page-aligned) */
         if (shard + 1 < sst->n_models) {
-            shard_virt_offset += (sm->file_size + page_size - 1) & ~(page_size - 1);
+            shard_virt_offset += (sm->file_size + 4095) & ~(uint64_t)4095;
         }
     }
     
