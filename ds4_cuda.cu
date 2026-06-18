@@ -2509,6 +2509,7 @@ extern "C" int ds4_gpu_synchronize(void) {
 }
 
 extern "C" void ds4_gpu_clear_stale_error(void) {
+    cudaDeviceSynchronize();
     (void)cudaGetLastError();
 }
 
@@ -8169,7 +8170,8 @@ extern "C" int ds4_gpu_rms_norm_weight_rows_tensor(ds4_gpu_tensor *out, const ds
     memcpy(tmp, w, w_bytes);
     cudaMemcpy(d_w, tmp, w_bytes, cudaMemcpyHostToDevice);
     free(tmp);
-    /* Sync to catch any stale error from previous kernel */
+    /* Clear any stale async error from previous kernels before launching */
+    cudaDeviceSynchronize();
     (void)cudaGetLastError();
     rms_norm_weight_kernel<<<rows, 256>>>((float *)out->ptr, (const float *)x->ptr, d_w, n, rows, eps);
     cudaError_t launch_err = cudaDeviceSynchronize();
