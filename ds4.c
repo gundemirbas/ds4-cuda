@@ -2070,22 +2070,31 @@ static bool model_open_safetensors(ds4_model *m, const char *model_dir,
         total_size += sst->models[i]->file_size;
     }
     
-    /* Use mmap to create a virtual region covering all shards.
-     * We mmap the first shard at the base address (MAP_SHARED),
-     * then use MAP_FIXED to map subsequent shards at the right offset. */
-    void *virt_base = mmap(NULL, total_size, PROT_NONE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    /* Page-align total size for the anonymous reservation */
+    const uint64_t page_size = 4096;
+    uint64_t total_size_page = (total_size + page_size - 1) & ~(page_size - 1);
+    
+    /* Create a unified virtual mapping covering all shards contiguously.
+     * We first reserve virtual address space with an anonymous mmap,
+     * then map each shard file at the correct offset within that space.
+     * This allows abs_offset to be a global offset into a single mapping. */
+    void *virt_base = mmap(NULL, total_size_page, PROT_NONE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
     if (virt_base == MAP_FAILED) {
         fprintf(stderr, "ds4: failed to create virtual mmap region: %s\n", strerror(errno));
         sst_sharded_model_free(sst);
         return false;
     }
     
+    /* Page-align file sizes for offset computation */
     uint64_t virt_offset = 0;
+    const uint64_t page_size = 4096;
     for (uint64_t i = 0; i < sst->n_models; i++) {
         sst_model *sm = sst->models[i];
+        /* Round file size up to page boundary for offset tracking */
+        uint64_t file_size_page = (sm->file_size + page_size - 1) & ~(page_size - 1);
         void *target = (void *)((uintptr_t)virt_base + virt_offset);
-        void *mapped = mmap(target, sm->file_size, PROT_READ,
-                            MAP_FIXED | MAP_SHARED | MAP_POPULATE,
+        void *mapped = mmap(target, file_size_page, PROT_READ,
+                            MAP_FIXED | MAP_SHARED,
                             sm->fd, 0);
         if (mapped == MAP_FAILED) {
             fprintf(stderr, "ds4: failed to mmap shard %" PRIu64 " at offset %" PRIu64 ": %s\n",
@@ -2094,7 +2103,7 @@ static bool model_open_safetensors(ds4_model *m, const char *model_dir,
             sst_sharded_model_free(sst);
             return false;
         }
-        virt_offset += sm->file_size;
+        virt_offset += file_size_page;
     }
     
     sst_model *first = sst->models[0];
@@ -2191,9 +2200,9 @@ static bool model_open_safetensors(ds4_model *m, const char *model_dir,
             t->rel_offset = shard_virt_offset + st->data_offset;
             t->bytes = st->data_size;
         }
-        /* Update shard_virt_offset for next shard */
+        /* Update shard_virt_offset for next shard (page-aligned) */
         if (shard + 1 < sst->n_models) {
-            shard_virt_offset += sm->file_size;
+            shard_virt_offset += (sm->file_size + page_size - 1) & ~(page_size - 1);
         }
     }
     
