@@ -360,6 +360,11 @@ static const char *cuda_model_range_populate_device_copy(const void *model_map,
                                                           uint64_t offset,
                                                           uint64_t bytes,
                                                           const char *what) {
+    fprintf(stderr, "ds4: DBG populate_device_copy %s offset=%lu bytes=%.2fMiB model_map=%p\n",
+            what ? what : "weights",
+            (unsigned long)offset,
+            (double)bytes / 1048576.0,
+            model_map);
     const uint64_t limit = cuda_model_cache_limit_bytes();
     if (g_model_range_bytes > limit || bytes > limit - g_model_range_bytes) {
         if (getenv("DS4_CUDA_WEIGHT_CACHE_VERBOSE")) {
@@ -379,8 +384,17 @@ static const char *cuda_model_range_populate_device_copy(const void *model_map,
                 what ? what : "weights", (double)bytes / 1048576.0, cudaGetErrorString(err));
         return NULL;
     }
+    fprintf(stderr, "ds4: DBG cudaMalloc OK dev=%p\n", dev);
 
     const char *src = (const char *)model_map + offset;
+    /* Verify source address is readable */
+    {
+        volatile float test = 0.0f;
+        __sync_synchronize();
+        test = *(const volatile float *)src;
+        (void)test;
+        fprintf(stderr, "ds4: DBG source read OK at %p\n", src);
+    }
     const uint64_t chunk = 64ull * 1024ull * 1024ull;
     for (uint64_t done = 0; done < bytes; done += chunk) {
         uint64_t n = bytes - done < chunk ? bytes - done : chunk;
@@ -444,14 +458,20 @@ static const char *cuda_model_range_ptr(const void *model_map, uint64_t offset, 
     const char *direct_env = getenv("DS4_CUDA_DIRECT_MODEL");
     if (direct_env && direct_env[0]) return cuda_model_ptr(model_map, offset);
 
+    fprintf(stderr, "ds4: DBG range_ptr offset=%lu bytes=%.2fMiB what=%s hmm_direct=%d fd=%d\n",
+            (unsigned long)offset, (double)bytes / 1048576.0,
+            what ? what : "NULL", g_model_hmm_direct, g_model_fd);
     if (getenv("DS4_CUDA_NO_FD_CACHE") == NULL) {
         const char *fd_ptr = cuda_model_range_ptr_from_fd(model_map, offset, bytes, what);
-        if (fd_ptr) return fd_ptr;
+        if (fd_ptr) { fprintf(stderr, "ds4: DBG fd_ptr OK\n"); return fd_ptr; }
+        fprintf(stderr, "ds4: DBG fd_ptr FAIL\n");
     }
 
     const char *mapped = cuda_model_range_register_mapped(model_map, offset, bytes, what);
-    if (mapped) return mapped;
+    if (mapped) { fprintf(stderr, "ds4: DBG mapped OK\n"); return mapped; }
+    fprintf(stderr, "ds4: DBG mapped FAIL\n");
 
+    fprintf(stderr, "ds4: DBG trying populate_device_copy\n");
     return cuda_model_range_populate_device_copy(model_map, offset, bytes, what);
 }
 
