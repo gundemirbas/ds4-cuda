@@ -14318,7 +14318,7 @@ static bool metal_graph_layer_stage_profile_boundary(
         uint32_t    pos0,
         uint32_t    n_tokens,
         double     *stage_t0);
-static bool __attribute__((unused)) metal_graph_decode_stage_profile_enabled(uint32_t il);
+static bool metal_graph_decode_stage_profile_enabled(uint32_t il);
 static bool metal_graph_matmul_plain_tensor(
         ds4_gpu_tensor       *out,
         const ds4_model        *model,
@@ -17537,8 +17537,8 @@ static int metal_graph_first_token_full_test(
 
     ds4_gpu_graph g;
     bool ok = metal_graph_alloc(&g, weights, &weights->layer[0]);
-    /* Catch any stale error from model loading/GPU init */
-    if (ok && ds4_gpu_synchronize() != 0) {
+    g.quality = quality;
+    const bool trace_layers = getenv("DS4_METAL_GRAPH_TRACE_LAYERS") != NULL;
     if (trace_layers && ok) {
         g.materialize_ffn_out = true;
         const bool teacher_force = getenv("DS4_METAL_GRAPH_TEACHER_FORCE") != NULL;
@@ -17608,8 +17608,8 @@ static int metal_graph_first_token_full_test(
                                                      (uint32_t)token,
                                                      DS4_N_EMBD,
                                                      DS4_N_HC) != 0;
-        /* Check if embed token caused error */
-        if (ok && ds4_gpu_synchronize() != 0) {
+
+        for (uint32_t il = 0; ok && il < DS4_N_LAYER; il++) {
             ok = metal_graph_encode_decode_layer(&g, model, &weights->layer[il],
                                                  il, 0, g.layer_raw_cache[il],
                                                  g.raw_cap, 0, 1, token);
@@ -17620,8 +17620,8 @@ static int metal_graph_first_token_full_test(
 
         if (ok) ok = metal_graph_encode_output_head(&g, model, weights, vocab_dim);
         if (ok) ok = ds4_gpu_end_commands() != 0;
-        /* Check if decode layers caused error */
-        if (ok && ds4_gpu_synchronize() != 0) {
+    }
+
     if (ok) {
         ok = ds4_gpu_tensor_read(g.cur_hc, 0, gpu_hc, hc_dim * sizeof(float)) != 0 &&
              ds4_gpu_tensor_read(g.logits, 0, gpu_logits, vocab_dim * sizeof(float)) != 0;
@@ -18000,7 +18000,7 @@ static bool metal_graph_layer_stage_profile_enabled(uint32_t il) {
            metal_graph_profile_layer_env_match("DS4_METAL_LAYER_STAGE_PROFILE_LAYER", il);
 }
 
-static bool __attribute__((unused)) metal_graph_decode_stage_profile_enabled(uint32_t il) {
+static bool metal_graph_decode_stage_profile_enabled(uint32_t il) {
     return getenv("DS4_METAL_DECODE_STAGE_PROFILE") != NULL &&
            metal_graph_profile_layer_env_match("DS4_METAL_DECODE_STAGE_PROFILE_LAYER", il);
 }
@@ -18103,8 +18103,8 @@ static bool metal_graph_encode_layer_attention_batch(
     ds4_gpu_tensor *after_attn_hc_view = ds4_gpu_tensor_view(
             g->batch_after_attn_hc, 0, (uint64_t)n_tokens * hc_dim * sizeof(float));
     bool ok = hc_mix_view && hc_split_view && attn_cur_view && after_attn_hc_view;
-    /* Catch any stale error from previous layer */
-    if (ok && ds4_gpu_synchronize() != 0) {
+    const bool fuse_hc_norm = DS4_N_HC == 4 &&
+                              !metal_graph_use_reference_hc_decode() &&
                               metal_graph_enable_batch_hc_norm_fusion();
     if (ok) ok = ds4_gpu_rms_norm_plain_rows_tensor(g->batch_flat_hc,
                                                       g->batch_cur_hc,
@@ -18171,8 +18171,8 @@ static bool metal_graph_encode_layer_attention_batch(
     }
     DS4_METAL_PROFILE_ATTN_STAGE("hc_pre");
     if (ok && !fuse_hc_norm) {
-        /* Catch any stale error from previous kernels */
-        if (ds4_gpu_synchronize() != 0) {
+        ok = ds4_gpu_rms_norm_weight_rows_tensor(g->batch_attn_norm,
+                                                  g->batch_attn_cur,
                                                   model->map,
                                                   model->size,
                                                   layer->attn_norm->abs_offset,
@@ -21065,7 +21065,7 @@ static bool metal_graph_prefill_layer_major(
     if (n_tokens == 0 || n_tokens > g->prefill_cap) return false;
     if (start > (uint32_t)prompt->len) return false;
     if (n_tokens > (uint32_t)prompt->len - start) return false;
-    /* Clear any stale error from previous operations */
+    /* Clear any stale CUDA error from previous operations */
     ds4_gpu_clear_stale_error();
 
     if (display_progress)
@@ -21110,9 +21110,9 @@ static bool metal_graph_prefill_layer_major(
                                                      prompt,
                                                      start,
                                                      n_tokens);
-        /* Check if prompt upload caused error */
-        if (ok && ds4_gpu_synchronize() != 0) {
-        if (ok && ds4_gpu_synchronize() != 0) {
+        if (ok) ok = ds4_gpu_begin_commands() != 0;
+        for (uint32_t il = 0; ok && il < DS4_N_LAYER; il++) {
+            ok = metal_graph_encode_layer_batch(g,
                                                 model,
                                                 &weights->layer[il],
                                                 il,
