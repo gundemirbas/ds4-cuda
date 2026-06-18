@@ -398,16 +398,32 @@ static const char *cuda_model_range_populate_device_copy(const void *model_map,
     const uint64_t chunk = 64ull * 1024ull * 1024ull;
     for (uint64_t done = 0; done < bytes; done += chunk) {
         uint64_t n = bytes - done < chunk ? bytes - done : chunk;
-        err = cudaMemcpy((char *)dev + done, src + done, (size_t)n, cudaMemcpyHostToDevice);
+        /* Try cudaMemcpyDefault first (UVA path), fall back to temporary CPU buffer */
+        err = cudaMemcpy((char *)dev + done, src + done, (size_t)n, cudaMemcpyDefault);
         if (err != cudaSuccess) {
-            fprintf(stderr, "ds4: CUDA model range copy failed for %s at %.2f/%.2f MiB: %s\n",
-                    what ? what : "weights",
-                    (double)done / 1048576.0,
-                    (double)bytes / 1048576.0,
+            /* Fallback: copy through a temporary CPU buffer */
+            fprintf(stderr, "ds4: DBG cudaMemcpyDefault failed: %s, trying tmp-buf fallback\n",
                     cudaGetErrorString(err));
-            (void)cudaFree(dev);
-            (void)cudaGetLastError();
-            return NULL;
+            void *tmp = malloc((size_t)n);
+            if (!tmp) {
+                fprintf(stderr, "ds4: CUDA model range tmp alloc failed\n");
+                (void)cudaFree(dev);
+                return NULL;
+            }
+            memcpy(tmp, src + done, (size_t)n);
+            err = cudaMemcpy((char *)dev + done, tmp, (size_t)n, cudaMemcpyHostToDevice);
+            free(tmp);
+            if (err != cudaSuccess) {
+                fprintf(stderr, "ds4: CUDA model range copy failed for %s at %.2f/%.2f MiB: %s\n",
+                        what ? what : "weights",
+                        (double)done / 1048576.0,
+                        (double)bytes / 1048576.0,
+                        cudaGetErrorString(err));
+                (void)cudaFree(dev);
+                (void)cudaGetLastError();
+                return NULL;
+            }
+            fprintf(stderr, "ds4: DBG tmp-buf fallback OK\n");
         }
     }
     g_model_ranges.push_back({model_map, offset, bytes, (char *)dev, NULL, NULL, 0, 0, 0});
