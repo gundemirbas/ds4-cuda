@@ -21115,6 +21115,10 @@ static bool metal_graph_prefill_layer_major(
                                                      start,
                                                      n_tokens);
         if (ok) ok = ds4_gpu_begin_commands() != 0;
+        /* Catch stale error from prompt embedding upload */
+        if (ok && ds4_gpu_synchronize() != 0) {
+            fprintf(stderr, "ds4: STALE ERROR before layer loop (from prompt upload)\n");
+        }
         for (uint32_t il = 0; ok && il < DS4_N_LAYER; il++) {
             ok = metal_graph_encode_layer_batch(g,
                                                 model,
