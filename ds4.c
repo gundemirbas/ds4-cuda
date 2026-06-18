@@ -5618,19 +5618,7 @@ static void matvec_f8e4m3_dispatch(ds4_gpu_tensor *out, const ds4_gpu_tensor *x,
 }
 
 /* Weight type dispatch — selects NVFP4/FP8/Q8_0 based on tensor type */
-/* Helper: dispatch GPU matmul based on weight tensor type.
- * Uses weight->type to select the right kernel (NVFP4, F8_E4M3, F16, etc.). */
-static inline bool gpu_matmul_tensor(
-    ds4_gpu_tensor       *out,
-    const ds4_model      *model,
-    const ds4_tensor     *weight,
-    const ds4_gpu_tensor *x,
-    uint64_t              n_tok) {
-    return matmul_weight_dispatch(out, model->map, model->size,
-        weight->abs_offset, weight->dim[0], weight->dim[1],
-        x, n_tok, weight->type) != 0;
-}
-
+/* Weight type dispatch — selects NVFP4/FP8/Q8_0 based on tensor type */
 static int matmul_weight_dispatch(
     ds4_gpu_tensor       *out,
     const void             *model_map,
