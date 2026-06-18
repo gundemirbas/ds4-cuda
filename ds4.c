@@ -26409,6 +26409,12 @@ int ds4_engine_open(ds4_engine **out, const ds4_engine_options *opt) {
     e->ssd_streaming_cold = opt->ssd_streaming_cold;
     e->fp8_kv_cache = opt->fp8_kv_cache;
     use_fp8_kv_cache = opt->fp8_kv_cache;
+    /* Auto-enable SSD streaming for safetensors models to avoid
+     * exhausting GPU memory with startup cache copies. */
+    if (is_safetensors_model(opt->model_path) && !opt->ssd_streaming) {
+        e->ssd_streaming = true;
+        fprintf(stderr, "ds4: auto-enabling SSD streaming for safetensors model\n");
+    }
     e->distributed = opt->distributed;
     e->power_percent = opt->power_percent > 0 ? opt->power_percent : 100;
     e->prefill_chunk = opt->prefill_chunk;
@@ -26816,7 +26822,10 @@ int ds4_engine_open(ds4_engine **out, const ds4_engine_options *opt) {
         if (e->model.shard_count == 0) {
             (void)ds4_gpu_set_model_fd_for_map(e->model.fd, e->model.map);
         }
-        if (!accelerator_cache_model_tensors(e->backend, &e->model,
+        /* Safetensors: skip startup cache to avoid exhausting GPU memory.
+         * On-demand caching during inference will copy weights as needed. */
+        if (e->model.shard_count == 0 &&
+            !accelerator_cache_model_tensors(e->backend, &e->model,
                                              load_offsets, load_sizes,
                                              load_span_count)) {
             fprintf(stderr, "ds4: %s failed to prepare optional model cache\n",
