@@ -13290,11 +13290,19 @@ extern "C" int ds4_gpu_matmul_tensor(
         if (x->bytes < n_tok * in_dim * sizeof(float) ||
             out->bytes < n_tok * out_dim * sizeof(float)) return 0;
         const char *wptr = cuda_model_range_ptr(model_map, weight_offset, weight_bytes, "f32");
-        if (!wptr) return 0;
+        if (!wptr) {
+            fprintf(stderr, "ds4: F32 matmul: wptr is NULL at offset %llu\n", (unsigned long long)weight_offset);
+            return 0;
+        }
         matmul_f32_kernel<<<dim3((unsigned int)out_dim, (unsigned int)n_tok), 256>>>(
             (float *)out->ptr, (const float *)wptr,
             (const float *)x->ptr, in_dim, out_dim, n_tok);
-        return cuda_ok(cudaGetLastError(), "f32 matmul launch");
+        cudaError_t err = cudaGetLastError();
+        if (err != cudaSuccess) {
+            fprintf(stderr, "ds4: F32 matmul launch error: %s\n", cudaGetErrorString(err));
+            return 0;
+        }
+        return 1;
     }
     default:
         return ds4_gpu_matmul_q8_0_tensor(out, model_map, model_size,
