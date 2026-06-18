@@ -2524,6 +2524,8 @@ static int sst_map_layer_tensor(const char *name, char *dst, size_t dst_size) {
     /* FFN tensors */
     if (strcmp(rest_base, "ffn_gate_inp") == 0)
         return snprintf(dst, dst_size, "ffn.gate.weight") > 0 ? 0 : -1;
+    if (strcmp(rest_base, "ffn_gate_tid2eid") == 0)
+        return snprintf(dst, dst_size, "ffn.gate.tid2eid") > 0 ? 0 : -1;
     if (strcmp(rest_base, "ffn_gate_shexp") == 0)
         return snprintf(dst, dst_size, "ffn.shared_experts.w1%s", has_weight ? ".weight" : has_scale ? ".scale" : "") > 0 ? 0 : -1;
     if (strcmp(rest_base, "ffn_up_shexp") == 0)
