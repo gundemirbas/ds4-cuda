@@ -11910,9 +11910,9 @@ static bool metal_graph_alloc_raw_cap(
     g->batch_hc_split = ds4_gpu_tensor_alloc(pc * mix_hc * sizeof(float));
     g->batch_attn_cur = ds4_gpu_tensor_alloc(pc * DS4_N_EMBD * sizeof(float));
     g->batch_attn_norm = ds4_gpu_tensor_alloc(pc * DS4_N_EMBD * sizeof(float));
-    fprintf(stderr, "ds4: DEBUG batch_attn_cur ptr=%p bytes=%u batch_attn_norm ptr=%p bytes=%u\n",
-            g->batch_attn_cur->ptr, (unsigned)g->batch_attn_cur->bytes,
-            g->batch_attn_norm->ptr, (unsigned)g->batch_attn_norm->bytes);
+    fprintf(stderr, "ds4: DEBUG batch_attn_cur ptr=%p bytes=%lu batch_attn_norm ptr=%p bytes=%lu\n",
+            g->batch_attn_cur->ptr, (unsigned long)g->batch_attn_cur->bytes,
+            g->batch_attn_norm->ptr, (unsigned long)g->batch_attn_norm->bytes);
     g->batch_qr = ds4_gpu_tensor_alloc(pc * q_rank * sizeof(float));
     g->batch_qr_norm = ds4_gpu_tensor_alloc(pc * q_rank * sizeof(float));
     g->batch_q = ds4_gpu_tensor_alloc(pc * q_dim * sizeof(float));
