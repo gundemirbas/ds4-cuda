@@ -26641,7 +26641,12 @@ int ds4_engine_open(ds4_engine **out, const ds4_engine_options *opt) {
                 }
             }
         }
-        (void)ds4_gpu_set_model_fd(e->model.fd);
+        /* Safetensors multi-shard models: don't set model fd because the
+         * fd only covers the first shard — fd-based pread would read garbage
+         * for tensors in other shards.  GGUF single-file models work fine. */
+        if (e->model.shard_count == 0) {
+            (void)ds4_gpu_set_model_fd(e->model.fd);
+        }
         int model_map_ok = 0;
         uint64_t *load_offsets = NULL;
         uint64_t *load_sizes = NULL;
@@ -26808,7 +26813,9 @@ int ds4_engine_open(ds4_engine **out, const ds4_engine_options *opt) {
             *out = NULL;
             return 1;
         }
-        (void)ds4_gpu_set_model_fd_for_map(e->model.fd, e->model.map);
+        if (e->model.shard_count == 0) {
+            (void)ds4_gpu_set_model_fd_for_map(e->model.fd, e->model.map);
+        }
         if (!accelerator_cache_model_tensors(e->backend, &e->model,
                                              load_offsets, load_sizes,
                                              load_span_count)) {
@@ -26825,7 +26832,10 @@ int ds4_engine_open(ds4_engine **out, const ds4_engine_options *opt) {
         /* Also apply explicit optional Q8 preload settings to the MTP support
          * model when loaded. */
         if (e->mtp_ready) {
-            (void)ds4_gpu_set_model_fd_for_map(e->mtp_model.fd, e->mtp_model.map);
+            /* MTP model fd: skip for safetensors (multi-shard) */
+            if (e->mtp_model.shard_count == 0) {
+                (void)ds4_gpu_set_model_fd_for_map(e->mtp_model.fd, e->mtp_model.map);
+            }
             if (!accelerator_cache_model_tensors(e->backend, &e->mtp_model,
                                                  NULL, NULL, 0)) {
                 fprintf(stderr, "ds4: %s failed to prepare optional MTP model cache\n",

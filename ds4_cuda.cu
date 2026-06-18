@@ -2558,7 +2558,9 @@ static int cuda_model_set_host_map(const void *model_map, uint64_t model_size) {
     }
     /* Attempt CUDA host registration for UVA direct GPU access.
      * If registration fails (e.g. MAP_ANONYMOUS or insufficient memory),
-     * fall back to hmm_direct mode where GPU reads via host virtual address. */
+     * fall back to GPU cache copy (cuda_model_range_register_mapped).
+     * Do NOT set hmm_direct — on GB10, unregistered host memory is not
+     * accessible from GPU kernels. */
     if (!g_model_registered && !g_model_device_owned && model_map && model_size > 0) {
         unsigned int flags = cudaHostRegisterMapped | cudaHostRegisterReadOnly;
         if (getenv("DS4_CUDA_HOST_REGISTER_PLAIN") != NULL) {
@@ -2572,10 +2574,9 @@ static int cuda_model_set_host_map(const void *model_map, uint64_t model_size) {
                 g_model_device_base = (const char *)dev;
                 g_model_registered = 1;
             }
-        } else {
-            /* Registration failed — enable direct host access via UVA */
-            g_model_hmm_direct = 1;
         }
+        /* If registration fails, do NOT set hmm_direct.  Leave g_model_hmm_direct = 0
+         * so that cuda_model_range_ptr falls through to fd-based or copy paths. */
     }
     return 1;
 }
