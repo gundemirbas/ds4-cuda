@@ -13423,12 +13423,17 @@ extern "C" int ds4_gpu_matmul_tensor(
             fprintf(stderr, "ds4: F32 matmul: wptr is NULL at offset %llu\n", (unsigned long long)weight_offset);
             return 0;
         }
+        /* Clear stale errors before launching */
+        (void)cudaGetLastError();
         matmul_f32_kernel<<<dim3((unsigned int)out_dim, (unsigned int)n_tok), 256>>>(
             (float *)out->ptr, (const float *)wptr,
             (const float *)x->ptr, in_dim, out_dim, n_tok);
         cudaError_t err = cudaGetLastError();
         if (err != cudaSuccess) {
-            fprintf(stderr, "ds4: F32 matmul launch error: %s\n", cudaGetErrorString(err));
+            fprintf(stderr, "ds4: F32 matmul launch error (%s) grid=(%u,%u,1) dims=(%u,%u,%u)\n",
+                    cudaGetErrorString(err),
+                    (unsigned)out_dim, (unsigned)n_tok,
+                    (unsigned)in_dim, (unsigned)out_dim, (unsigned)n_tok);
             return 0;
         }
         return 1;
