@@ -21071,6 +21071,10 @@ static bool metal_graph_prefill_layer_major(
     if (n_tokens == 0 || n_tokens > g->prefill_cap) return false;
     if (start > (uint32_t)prompt->len) return false;
     if (n_tokens > (uint32_t)prompt->len - start) return false;
+    /* Catch any stale error from previous operations */
+    if (ds4_gpu_synchronize() != 0) {
+        fprintf(stderr, "ds4: STALE ERROR at START of prefill (start=%u n=%u)\n", start, n_tokens);
+    }
 
     if (display_progress)
         display_progress(display_progress_ud, "prefill_display", (int)start, prompt->len);
