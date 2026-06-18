@@ -8173,6 +8173,8 @@ extern "C" int ds4_gpu_rms_norm_weight_rows_tensor(ds4_gpu_tensor *out, const ds
     /* Clear any stale async error from previous kernels before launching */
     cudaDeviceSynchronize();
     (void)cudaGetLastError();
+    fprintf(stderr, "ds4: DEBUG rms_norm_weight_rows: rows=%u n=%u out_ptr=%p x_ptr=%p d_w=%p\n",
+            rows, n, out->ptr, x->ptr, d_w);
     rms_norm_weight_kernel<<<rows, 256>>>((float *)out->ptr, (const float *)x->ptr, d_w, n, rows, eps);
     cudaError_t launch_err = cudaDeviceSynchronize();
     if (launch_err != cudaSuccess) {
