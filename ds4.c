@@ -5894,6 +5894,9 @@ static void matmul_q8_0_pair_batch_prequant(
 
 /* Batched Q8_0 matmul for prefill: quantize all token activations, then scan
  * weight rows once per output channel. */
+/* Forward declaration */
+static void matmul_q8_0_batch(float *out, const ds4_model *m, const ds4_tensor *w, const float *x, uint64_t n_tok);
+
 /* ds4-cuda: Type-aware batch matmul — dispatches based on weight type.
  * For Q8_0 (type 8): uses Q8_0 quantization path.
  * For other types: delegates to ds4_gpu_matmul_tensor which handles
