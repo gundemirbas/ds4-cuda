@@ -7317,9 +7317,22 @@ extern "C" int ds4_gpu_embed_token_hc_tensor(ds4_gpu_tensor *out_hc, const void 
     if (weight_offset > model_size || weight_bytes > model_size - weight_offset) return 0;
     const char *wptr = cuda_model_range_ptr(model_map, weight_offset, weight_bytes, "token_embd");
     if (!wptr) return 0;
+    /* Copy token row to GPU — UVA pointers from mmap may not be accessible
+     * from all kernel address spaces on GB10. */
+    const size_t row_bytes = (size_t)n_embd * sizeof(uint16_t);
+    uint16_t *tmp = (uint16_t *)malloc(row_bytes);
+    if (!tmp) return 0;
+    const uint16_t *src = (const uint16_t *)wptr + (uint64_t)token * n_embd;
+    memcpy(tmp, src, row_bytes);
+    uint16_t *d_row = NULL;
+    if (cudaMalloc(&d_row, row_bytes) != cudaSuccess) { free(tmp); return 0; }
+    cudaMemcpy(d_row, tmp, row_bytes, cudaMemcpyHostToDevice);
+    free(tmp);
     uint32_t n = n_embd * n_hc;
-    embed_token_hc_kernel<<<(n + 255) / 256, 256>>>((float *)out_hc->ptr, (const unsigned short *)wptr, token, n_embd, n_hc);
-    return cuda_ok(cudaGetLastError(), "embed token launch");
+    embed_token_hc_kernel<<<(n + 255) / 256, 256>>>((float *)out_hc->ptr, (const unsigned short *)d_row, 0, n_embd, n_hc);
+    int ok = cuda_ok(cudaGetLastError(), "embed token launch");
+    cudaFree(d_row);
+    return ok;
 }
 
 extern "C" int ds4_gpu_embed_tokens_hc_tensor(
