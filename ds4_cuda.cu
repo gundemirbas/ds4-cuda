@@ -237,7 +237,6 @@ static int cuda_model_copy_to_device_streamed(
         uint64_t bytes,
         const char *what);
 static uint64_t cuda_model_cache_limit_bytes(void);
-static int cuda_model_cache_limit_explicit(void);
 __global__ static void dequant_q8_0_to_f16_kernel(
         __half *out,
         const unsigned char *w,
@@ -1125,11 +1124,6 @@ static uint64_t cuda_model_cache_limit_bytes(void) {
      * use distributed layer loading unless the operator opts into a larger
      * cache budget explicitly. */
     return 96ull * 1073741824ull;
-}
-
-static int cuda_model_cache_limit_explicit(void) {
-    const char *env = getenv("DS4_CUDA_WEIGHT_CACHE_LIMIT_GB");
-    return env && env[0];
 }
 
 static uint64_t cuda_model_arena_chunk_bytes(uint64_t need) {
