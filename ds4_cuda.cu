@@ -719,6 +719,7 @@ static const __half *cuda_q8_f16_ptr(
     }
     const uint64_t blocks = (in_dim + 31) / 32;
     const uint64_t n = in_dim * out_dim;
+    (void)cudaGetLastError(); /* clear any stale error before launch */
     dequant_q8_0_to_f16_kernel<<<(n + 255) / 256, 256>>>(dev,
                                                           (const unsigned char *)q8,
                                                           in_dim,
@@ -9293,10 +9294,15 @@ extern "C" int ds4_gpu_attention_output_q8_batch_tensor(
         long v = strtol(out_a_min_env, &endp, 10);
         if (endp != out_a_min_env && v > 1 && v < 4096) out_a_cublas_min_tokens = (uint32_t)v;
     }
+    /* ds4-cuda: Skip Q8 dequant for F8_E4M3/NVFP4 models.
+     * The attention output weights are F8_E4M3 in safetensors models.
+     * Q8_0 dequant path reads wrong format and fails on GB10. */
+    const bool skip_q8_dequant = (getenv("DS4_CUDA_NO_CUBLAS_ATTENTION_OUTPUT_A") != NULL) ||
+                                  (g_model_hmm_direct && !g_model_device_owned && !g_model_registered);
     if (!g_quality_mode &&
         g_cublas_ready &&
         n_tokens >= out_a_cublas_min_tokens &&
-        getenv("DS4_CUDA_NO_CUBLAS_ATTENTION_OUTPUT_A") == NULL) {
+        !skip_q8_dequant) {
         out_a_f16 = cuda_q8_f16_ptr(model_map, out_a_offset, out_a_bytes, group_dim, low_dim, "attn_output_a");
     }
     if (out_a_f16) {
