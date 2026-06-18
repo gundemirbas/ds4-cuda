@@ -3661,18 +3661,22 @@ static void tensor_expect_layout(
     uint32_t actual = t->type;
     int ok = (actual == type);
     if (!ok) {
+        /* Accept common alternatives for safetensors models */
         switch (type) {
             case DS4_TENSOR_F16:
                 ok = (actual == DS4_TENSOR_NVFP4 || actual == DS4_TENSOR_F8_E4M3 ||
-                      actual == DS4_TENSOR_MXFP4 || actual == DS4_TENSOR_BF16);
+                      actual == DS4_TENSOR_MXFP4 || actual == DS4_TENSOR_BF16 ||
+                      actual == DS4_TENSOR_F32);
                 break;
             case DS4_TENSOR_F32:
                 ok = (actual == DS4_TENSOR_NVFP4 || actual == DS4_TENSOR_F8_E4M3 ||
-                      actual == DS4_TENSOR_MXFP4 || actual == DS4_TENSOR_BF16);
+                      actual == DS4_TENSOR_MXFP4 || actual == DS4_TENSOR_BF16 ||
+                      actual == DS4_TENSOR_F16);
                 break;
             case DS4_TENSOR_Q8_0:
                 ok = (actual == DS4_TENSOR_NVFP4 || actual == DS4_TENSOR_F8_E4M3 ||
-                      actual == DS4_TENSOR_MXFP4);
+                      actual == DS4_TENSOR_MXFP4 || actual == DS4_TENSOR_F16 ||
+                      actual == DS4_TENSOR_F32);
                 break;
             default:
                 ok = 0;
