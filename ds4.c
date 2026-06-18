@@ -16950,14 +16950,16 @@ static bool metal_graph_matmul_q8_0_named_tensor(
     (void)module;
     (void)il;
     (void)pos0;
-    const bool ok = ds4_gpu_matmul_q8_0_tensor(out,
-                                                 model->map,
-                                                 model->size,
-                                                 w->abs_offset,
-                                                 in_dim,
-                                                 out_dim,
-                                                 x,
-                                                 n_tok) != 0;
+    /* Use type-aware dispatch: F8_E4M3/NVFP4/F16/F32/Q8_0 */
+    const bool ok = ds4_gpu_matmul_tensor(out,
+                                           model->map,
+                                           model->size,
+                                           w->abs_offset,
+                                           in_dim,
+                                           out_dim,
+                                           x,
+                                           n_tok,
+                                           w->type) != 0;
     return ok;
 }
 
