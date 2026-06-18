@@ -14318,7 +14318,7 @@ static bool metal_graph_layer_stage_profile_boundary(
         uint32_t    pos0,
         uint32_t    n_tokens,
         double     *stage_t0);
-static bool metal_graph_decode_stage_profile_enabled(uint32_t il);
+static bool __attribute__((unused)) metal_graph_decode_stage_profile_enabled(uint32_t il);
 static bool metal_graph_matmul_plain_tensor(
         ds4_gpu_tensor       *out,
         const ds4_model        *model,
@@ -18000,7 +18000,7 @@ static bool metal_graph_layer_stage_profile_enabled(uint32_t il) {
            metal_graph_profile_layer_env_match("DS4_METAL_LAYER_STAGE_PROFILE_LAYER", il);
 }
 
-static bool metal_graph_decode_stage_profile_enabled(uint32_t il) {
+static bool __attribute__((unused)) metal_graph_decode_stage_profile_enabled(uint32_t il) {
     return getenv("DS4_METAL_DECODE_STAGE_PROFILE") != NULL &&
            metal_graph_profile_layer_env_match("DS4_METAL_DECODE_STAGE_PROFILE_LAYER", il);
 }
