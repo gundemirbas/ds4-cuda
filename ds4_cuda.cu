@@ -20,7 +20,6 @@
 
 #include "ds4_gpu.h"
 #include "ds4.h"
-#include "ds4_layer_forward.cuh"
 
 #ifndef M_PI
 #define M_PI 3.14159265358979323846
@@ -2556,6 +2555,27 @@ static int cuda_model_set_host_map(const void *model_map, uint64_t model_size) {
     g_model_mapping_failure_notice_printed = 0;
     if (g_model_fd >= 0 && g_model_fd_host_base == NULL) {
         g_model_fd_host_base = model_map;
+    }
+    /* Attempt CUDA host registration for UVA direct GPU access.
+     * If registration fails (e.g. MAP_ANONYMOUS or insufficient memory),
+     * fall back to hmm_direct mode where GPU reads via host virtual address. */
+    if (!g_model_registered && !g_model_device_owned && model_map && model_size > 0) {
+        unsigned int flags = cudaHostRegisterMapped | cudaHostRegisterReadOnly;
+        if (getenv("DS4_CUDA_HOST_REGISTER_PLAIN") != NULL) {
+            flags = cudaHostRegisterMapped;
+        }
+        cudaError_t err = cudaHostRegister((void *)model_map, (size_t)model_size, flags);
+        if (err == cudaSuccess) {
+            void *dev = NULL;
+            err = cudaHostGetDevicePointer(&dev, (void *)model_map, 0);
+            if (err == cudaSuccess && dev) {
+                g_model_device_base = (const char *)dev;
+                g_model_registered = 1;
+            }
+        } else {
+            /* Registration failed — enable direct host access via UVA */
+            g_model_hmm_direct = 1;
+        }
     }
     return 1;
 }

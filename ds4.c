@@ -2080,10 +2080,11 @@ static bool model_open_safetensors(ds4_model *m, const char *model_dir,
     uint64_t total_size_page = (total_size + 4095) & ~(uint64_t)4095;
     
     /* Create a unified virtual mapping covering all shards contiguously.
-     * We first reserve virtual address space with an anonymous mmap,
+     * We first reserve virtual address space with an anonymous mmap (PROT_READ
+     * so CUDA cudaHostRegisterMapped can pin the pages later),
      * then map each shard file at the correct offset within that space.
      * This allows abs_offset to be a global offset into a single mapping. */
-    void *virt_base = mmap(NULL, total_size_page, PROT_NONE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    void *virt_base = mmap(NULL, total_size_page, PROT_READ, MAP_SHARED | MAP_ANONYMOUS, -1, 0);
     if (virt_base == MAP_FAILED) {
         fprintf(stderr, "ds4: failed to create virtual mmap region: %s\n", strerror(errno));
         sst_sharded_model_free(sst);
@@ -26467,6 +26468,11 @@ int ds4_engine_open(ds4_engine **out, const ds4_engine_options *opt) {
         if (!model_open_safetensors(&e->model, opt->model_path, graph_backend, !opt->inspect_only)) {
             fprintf(stderr, "ds4: failed to load safetensors model, trying GGUF fallback\n");
             model_open(&e->model, opt->model_path, graph_backend, !opt->inspect_only);
+        }
+        /* Auto-enable FP8 KV cache for safetensors models */
+        if (!opt->fp8_kv_cache) {
+            e->fp8_kv_cache = true;
+            use_fp8_kv_cache = true;
         }
     } else {
         model_open(&e->model, opt->model_path, graph_backend, !opt->inspect_only);

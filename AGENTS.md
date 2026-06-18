@@ -38,19 +38,22 @@ EKLENEN YENİ ÖZELLİKLER:
 
 | Aşama | Durum | Açıklama |
 |-------|-------|----------|
-| Safetensors parser | ✅ Tamamlandı | `ds4_safetensors.c` (434 satır) |
-| FP8 KV cache CPU | ✅ Tamamlandı | `ds4_kv_cache.c` (104 satır) |
-| FP8 KV cache GPU | ✅ Tamamlandı | `ds4_kv_cache.cu` (124 satır) |
-| config.json parser | ✅ Tamamlandı | `ds4_model_config.c` (270 satır) |
-| Expert LRU cache | ✅ Tamamlandı | `ds4_expert_cache.c` (188 satır) |
-| NVFP4 MMQ kernel | ✅ Tamamlandı | `ds4_cuda_nvfp4_mmq.cu` (106 satır) |
-| Forward kernels | ✅ Tamamlandı | `ds4_cuda_forward.cu` (287 satır) |
-| FP8 attention | ✅ Tamamlandı | `ds4_cuda_fp8_attention.cu` (98 satır) |
-| Embedding kernels | ✅ Tamamlandı | `ds4_cuda_embedding.cu` (92 satır) |
-| **Merge → ds4.c** | ⏳ Bekliyor | Safetensors + FP8 KV + NVFP4 dispatch |
-| **Merge → ds4_cuda.cu** | ⏳ Bekliyor | NVFP4/FP8 kernel wrapper'ları |
-| **Merge → ds4.h** | ⏳ Bekliyor | Yeni typedef'ler |
-| **Merge → ds4_gpu.h** | ⏳ Bekliyor | Yeni prototipler |
+| Safetensors parser | ✅ Tamamlandı | `ds4.c` içine merge edildi (eski: `ds4_safetensors.c` 434 satır) |
+| FP8 KV cache CPU | ✅ Tamamlandı | `ds4.c` içine merge edildi (eski: `ds4_kv_cache.c` 104 satır) |
+| FP8 KV cache GPU | ✅ Tamamlandı | `ds4_cuda.cu` içine merge edildi (eski: `ds4_kv_cache.cu` 124 satır) |
+| config.json parser | ✅ Tamamlandı | `ds4.c` içine merge edildi (eski: `ds4_model_config.c` 270 satır) |
+| Expert LRU cache | ✅ Tamamlandı | `ds4.c` içine merge edildi (eski: `ds4_expert_cache.c` 188 satır) |
+| NVFP4 MMQ kernel | ✅ Tamamlandı | `ds4_cuda.cu` içine merge edildi (eski: `ds4_cuda_nvfp4_mmq.cu` 106 satır) |
+| Forward kernels | ✅ Tamamlandı | `ds4_cuda.cu` içine merge edildi (eski: `ds4_cuda_forward.cu` 287 satır) |
+| FP8 attention | ✅ Tamamlandı | `ds4_cuda.cu` içine merge edildi (eski: `ds4_cuda_fp8_attention.cu` 98 satır) |
+| Embedding kernels | ✅ Tamamlandı | `ds4_cuda.cu` içine merge edildi (eski: `ds4_cuda_embedding.cu` 92 satır) |
+| **Merge → ds4.c** | ✅ Tamamlandı | Safetensors loader + FP8 KV cache + NVFP4 dispatch + 4 kaynak merge |
+| **Merge → ds4_cuda.cu** | ✅ Tamamlandı | NVFP4/FP8 kernel wrapper'ları + 6 kaynak merge |
+| **Merge → ds4.h** | ✅ Tamamlandı | Safetensors/FP8/NVFP4 typedef'leri + 4 header merge |
+| **Merge → ds4_gpu.h** | ✅ Tamamlandı | NVFP4/FP8 fonksiyon prototipleri |
+| **SSD streaming (safetensors)** | ✅ Tamamlandı | PROT_READ + cudaHostRegister fallback + hmm_direct |
+| **FP8 KV cache (auto)** | ✅ Tamamlandı | Safetensors algılayınca otomatik etkin |
+| **Distributed (safetensors)** | ✅ Tamamlandı | Aynı SSD streaming mekanizması |
 | **End-to-end test** | ⏳ Bekliyor | Model yükleme + inference |
 
 ---
@@ -105,27 +108,27 @@ antirez/ds4/
 | `ds4.c` | Safetensors loader + FP8 KV cache + NVFP4 dispatch + kaynak merge | ~500 |
 | `ds4_cuda.cu` | NVFP4/FP8 kernel wrapper'ları + kaynak merge | ~300 |
 
-### 4.2 Merge Stratejisi (16 → 4 dosya)
+### 4.2 Merge Stratejisi (16 → 4 dosya) — Tamamlandı
 
 ```
-YENİ KOD                    → MERGE EDİLECEK DOSYA
-─────────────────────────────────────────────────────
-ds4_safetensors.c (434)     → ds4.c içine
-ds4_safetensors.h (87)      → ds4.h içine
-ds4_kv_cache.c (104)        → ds4.c içine
-ds4_kv_cache.cu (124)       → ds4_cuda.cu içine
-ds4_kv_cache.h (67)         → ds4.h içine
-ds4_model_config.c (270)    → ds4.c içine
-ds4_model_internal.h        → ds4.h içine
-ds4_expert_cache.c (188)    → ds4.c içine
-ds4_ssd_streaming.h (35)    → ds4.h içine
-ds4_cuda_nvfp4_mmq.cu       → ds4_cuda.cu içine
-ds4_cuda_forward.cu (287)   → ds4_cuda.cu içine
-ds4_cuda_fp8_attention.cu    → ds4_cuda.cu içine
-ds4_cuda_fp8_attention.cuh   → ds4_cuda.cu içine
-ds4_cuda_embedding.cu (92)   → ds4_cuda.cu içine
-ds4_cuda_embedding.cuh       → ds4_cuda.cu içine
-ds4_layer_forward.cuh        → ds4_cuda.cu içine
+YENİ KOD                    → HEDEF DOSYA         → DURUM
+────────────────────────────────────────────────────────────
+ds4_safetensors.c (434)     → ds4.c içine          ✅ Merge edildi, kaynak silindi
+ds4_safetensors.h (87)      → ds4.h içine          ✅ Merge edildi, kaynak silindi
+ds4_kv_cache.c (104)        → ds4.c içine          ✅ Merge edildi, kaynak silindi
+ds4_kv_cache.cu (124)       → ds4_cuda.cu içine    ✅ Merge edildi, kaynak silindi
+ds4_kv_cache.h (67)         → ds4.h içine          ✅ Merge edildi, kaynak silindi
+ds4_model_config.c (270)    → ds4.c içine          ✅ Merge edildi, kaynak silindi
+ds4_model_internal.h        → ds4.h içine          ✅ Merge edildi, kaynak silindi
+ds4_expert_cache.c (188)    → ds4.c içine          ✅ Merge edildi, kaynak silindi
+ds4_ssd_streaming.h (35)    → ds4.h içine          ✅ Merge edildi, kaynak silindi
+ds4_cuda_nvfp4_mmq.cu       → ds4_cuda.cu içine    ✅ Merge edildi, kaynak silindi
+ds4_cuda_forward.cu (287)   → ds4_cuda.cu içine    ✅ Merge edildi, kaynak silindi
+ds4_cuda_fp8_attention.cu   → ds4_cuda.cu içine    ✅ Merge edildi, kaynak silindi
+ds4_cuda_embedding.cu (92)   → ds4_cuda.cu içine    ✅ Merge edildi, kaynak silindi
+ds4_cuda_fp8_attention.cuh  → (kullanılmıyor)      🗑️ Silindi (içerik ds4_cuda.cu'ya merge)
+ds4_cuda_embedding.cuh      → (kullanılmıyor)      🗑️ Silindi (içerik ds4_cuda.cu'ya merge)
+ds4_layer_forward.cuh       → 🗑️ Silindi (ölü kod, engine kullanmıyor)
 ```
 
 ### 4.3 Korunan Orijinal Kod
@@ -146,11 +149,11 @@ metal/
 
 ## 5. Adım Adım Execution Planı
 
-### Adım 1: ds4.h Değişiklikleri
+### ~~Adım 1: ds4.h Değişiklikleri~~ ✅ Tamamlandı
 
 **Nerede:** `ds4.h` — mevcut typedef'lerin yanına (dosya sonu)
 
-**Eklenecek kod:**
+**Eklenecek kod (referans):**
 ```c
 /* =========================================================================
  * Safetensors support (ds4-cuda)
@@ -307,7 +310,7 @@ void ssd_expert_cache_stats(ssd_expert_cache *cache, uint64_t *hits, uint64_t *m
 
 ---
 
-### Adım 2: ds4_gpu.h Değişiklikleri
+### ~~Adım 2: ds4_gpu.h Değişiklikleri~~ ✅ Tamamlandı
 
 **Nerede:** `ds4_gpu.h` — mevcut prototiplerin sonuna (`#endif`'den önce)
 
@@ -366,7 +369,7 @@ int ds4_gpu_kv_fp8_quantize_append_tensor(
 
 ---
 
-### Adım 3: ds4.c Değişiklikleri
+### ~~Adım 3: ds4.c Değişiklikleri~~ ✅ Tamamlandı
 
 #### 3.1 Safetensors Loader (satır ~1900 civarı, `ds4_gguf_load` yanına)
 
@@ -475,7 +478,7 @@ Aşağıdaki dosyaların içeriği `ds4.c`'nin sonuna eklenir:
 
 ---
 
-### Adım 4: ds4_cuda.cu Değişiklikleri
+### ~~Adım 4: ds4_cuda.cu Değişiklikleri~~ ✅ Tamamlandı
 
 #### 4.1 Kernel Wrapper'ları (dosya sonu)
 
@@ -669,7 +672,7 @@ ssh xexnaor@10.0.0.2 './run.sh' > log.txt
 
 ## 10. Test Stratejisi
 
-### Birim Testleri
+### Birim Testleri (yapılacak)
 ```
 test_safetensors:    Safetensors parser (shard okuma, tensor bulma)
 test_fp8_kv_cache:   FP8 quantize accuracy (maxdiff < 1e-3)
@@ -677,7 +680,7 @@ test_nvfp4_gemm:     NVFP4 GEMV (CPU vs GPU, maxdiff < 1e-4)
 test_fp8_attention:  FP8 attention (CPU vs GPU, maxdiff < 1e-4)
 ```
 
-### Entegrasyon Testleri
+### Entegrasyon Testleri (yapılacak)
 ```
 test_model_load:     Model yükleme (safetensors + tokenizer)
 test_single_token:   Tek token üretimi (greedy decoding)
@@ -701,25 +704,28 @@ ds4_cuda_runtime.cuh, ds4_iq2_tables_cuda.inc, ds4_streaming_hotlist.inc
 metal/
 ```
 
-### DEĞİŞECEK (merge noktaları)
+### DEĞİŞTİ (merge tamamlandı)
 ```
-ds4.h              ← Safetensors/FP8/NVFP4 typedef'leri + 4 header merge
-ds4_gpu.h          ← NVFP4/FP8 fonksiyon prototipleri
-ds4.c              ← Safetensors loader + FP8 KV cache + NVFP4 dispatch + 4 kaynak merge
-ds4_cuda.cu        ← NVFP4/FP8 kernel wrapper'ları + 6 kaynak merge
+ds4.h              ← Safetensors/FP8/NVFP4 typedef'leri + 4 header merge ✅
+ds4_gpu.h          ← NVFP4/FP8 fonksiyon prototipleri ✅
+ds4.c              ← Safetensors loader + FP8 KV cache + NVFP4 dispatch + 4 kaynak merge ✅
+ds4_cuda.cu        ← NVFP4/FP8 kernel wrapper'ları + 6 kaynak merge ✅
 ```
 
-### YENİ KOD (mevcut, merge edilecek)
+### YENİ KOD (merge edildi, kaynaklar silindi)
 ```
-ds4_safetensors.c (434 satır)     → ds4.c
-ds4_safetensors.h (87 satır)      → ds4.h
-ds4_kv_cache.c (104 satır)        → ds4.c
-ds4_kv_cache.cu (124 satır)       → ds4_cuda.cu
-ds4_kv_cache.h (67 satır)         → ds4.h
-ds4_model_config.c (270 satır)    → ds4.c
-ds4_expert_cache.c (188 satır)    → ds4.c
-ds4_cuda_nvfp4_mmq.cu (106 satır) → ds4_cuda.cu
-ds4_cuda_forward.cu (287 satır)   → ds4_cuda.cu
-ds4_cuda_fp8_attention.cu (98 satır) → ds4_cuda.cu
-ds4_cuda_embedding.cu (92 satır)  → ds4_cuda.cu
+ds4_safetensors.c (434 satır)     → ds4.c ✅
+ds4_safetensors.h (87 satır)      → ds4.h ✅
+ds4_kv_cache.c (104 satır)        → ds4.c ✅
+ds4_kv_cache.cu (124 satır)       → ds4_cuda.cu ✅
+ds4_kv_cache.h (67 satır)         → ds4.h ✅
+ds4_model_config.c (270 satır)    → ds4.c ✅
+ds4_expert_cache.c (188 satır)    → ds4.c ✅
+ds4_cuda_nvfp4_mmq.cu (106 satır) → ds4_cuda.cu ✅
+ds4_cuda_forward.cu (287 satır)   → ds4_cuda.cu ✅
+ds4_cuda_fp8_attention.cu (98 satır) → ds4_cuda.cu ✅
+ds4_cuda_embedding.cu (92 satır)  → ds4_cuda.cu ✅
+ds4_cuda_fp8_attention.cuh       → 🗑️ Silindi
+ds4_cuda_embedding.cuh           → 🗑️ Silindi
+ds4_layer_forward.cuh            → 🗑️ Silindi (ölü kod)
 ```
