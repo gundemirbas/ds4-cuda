@@ -1586,20 +1586,25 @@ static const gguf_type_info gguf_types[] = {
     [28] = {"f64",      1,   8},
     [29] = {"iq1_m",  256,  56},
     [30] = {"bf16",     1,   2},
+    [33] = {"bf16",     1,   2},
+    [34] = {"f8_e4m3",  1,   1},
+    [35] = {"nvfp4",    1,   1},
+    [36] = {"mxfp4",    1,   1},
 };
 
 enum {
     DS4_TENSOR_F32      = 0,
     DS4_TENSOR_F16      = 1,
-    DS4_TENSOR_BF16     = 2,
     DS4_TENSOR_Q8_0     = 8,
     DS4_TENSOR_Q2_K     = 10,
     DS4_TENSOR_Q4_K     = 12,
     DS4_TENSOR_IQ2_XXS  = 16,
     DS4_TENSOR_I32      = 26,
-    DS4_TENSOR_F8_E4M3  = 30,
-    DS4_TENSOR_NVFP4    = 31,
-    DS4_TENSOR_MXFP4    = 32,
+    /* New types added for safetensors support (use values not in gguf_types[]) */
+    DS4_TENSOR_BF16     = 33,
+    DS4_TENSOR_F8_E4M3  = 34,
+    DS4_TENSOR_NVFP4    = 35,
+    DS4_TENSOR_MXFP4    = 36,
 };
 
 typedef struct {
@@ -3641,12 +3646,35 @@ static void tensor_expect_layout(
         uint64_t          d1,
         uint64_t          d2) {
     if (!t) ds4_die("internal error: missing tensor while validating layout");
-    if (t->type != type) {
+    /* Accept alternative types for safetensors models:
+     * - NVFP4/F8_E4M3/MXFP4/BF16 are valid alternatives for F16/F32/Q8_0 */
+    uint32_t actual = t->type;
+    int ok = (actual == type);
+    if (!ok) {
+        switch (type) {
+            case DS4_TENSOR_F16:
+                ok = (actual == DS4_TENSOR_NVFP4 || actual == DS4_TENSOR_F8_E4M3 ||
+                      actual == DS4_TENSOR_MXFP4 || actual == DS4_TENSOR_BF16);
+                break;
+            case DS4_TENSOR_F32:
+                ok = (actual == DS4_TENSOR_NVFP4 || actual == DS4_TENSOR_F8_E4M3 ||
+                      actual == DS4_TENSOR_MXFP4 || actual == DS4_TENSOR_BF16);
+                break;
+            case DS4_TENSOR_Q8_0:
+                ok = (actual == DS4_TENSOR_NVFP4 || actual == DS4_TENSOR_F8_E4M3 ||
+                      actual == DS4_TENSOR_MXFP4);
+                break;
+            default:
+                ok = 0;
+                break;
+        }
+    }
+    if (!ok) {
         fprintf(stderr,
                 "ds4: tensor %.*s has type %s, expected %s\n",
                 (int)t->name.len,
                 t->name.ptr,
-                tensor_type_name(t->type),
+                tensor_type_name(actual),
                 tensor_type_name(type));
         exit(1);
     }
