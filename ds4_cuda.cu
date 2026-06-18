@@ -12494,9 +12494,12 @@ static int routed_moe_launch(
         uint32_t tile16_capacity = 0;
         dim3 xq_grid(xq_blocks, n_tokens, 1);
         if (getenv("DS4_CUDA_DEBUG_MOE") != NULL) {
-            fprintf(stderr, "ds4: DBG moe xq=%p xptr=%p dim=%u ntok=%u\n",
-                    (void*)xq, (const void*)x->ptr, expert_in_dim, n_tokens);
+            fprintf(stderr, "ds4: DBG moe xq=%p xptr=%p dim=%u ntok=%u xq_blocks=%u grid=(%u,%u,%u)\n",
+                    (void*)xq, (const void*)x->ptr, expert_in_dim, n_tokens,
+                    xq_blocks, xq_grid.x, xq_grid.y, xq_grid.z);
         }
+        /* Clear stale errors before launching */
+        (void)cudaGetLastError();
         q8_K_quantize_kernel<<<xq_grid, 256>>>(xq, (const float *)x->ptr, expert_in_dim, n_tokens);
         ok = cuda_ok(cudaGetLastError(), "routed_moe x quantize launch");
         if (prof_ev[1]) (void)cudaEventRecord(prof_ev[1], 0);
