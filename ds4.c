@@ -2126,15 +2126,25 @@ static bool model_open_safetensors(ds4_model *m, const char *model_dir,
             t->name.ptr = name_copy;
             t->name.len = nlen;
             
-            /* Set dimensions */
+            /* Set dimensions — swap dim[0] and dim[1] for 2D tensors
+             * because safetensors stores weights as [output_dim, input_dim]
+             * while GGUF stores as [input_dim, output_dim].
+             * This matches how weights_bind expects the layout. */
             t->ndim = (uint32_t)st->ndim;
             uint64_t elems = 1;
-            for (uint32_t d = 0; d < t->ndim && d < DS4_MAX_DIMS; d++) {
-                t->dim[d] = st->shape[d];
-                if (st->shape[d] != 0 && elems > UINT64_MAX / st->shape[d]) {
-                    elems = UINT64_MAX;
-                } else {
-                    elems *= st->shape[d];
+            if (st->ndim == 2) {
+                /* Swap dimensions */
+                t->dim[0] = st->shape[1];
+                t->dim[1] = st->shape[0];
+                elems = st->shape[0] * st->shape[1];
+            } else {
+                for (uint32_t d = 0; d < t->ndim && d < DS4_MAX_DIMS; d++) {
+                    t->dim[d] = st->shape[d];
+                    if (st->shape[d] != 0 && elems > UINT64_MAX / st->shape[d]) {
+                        elems = UINT64_MAX;
+                    } else {
+                        elems *= st->shape[d];
+                    }
                 }
             }
             t->elements = elems;
