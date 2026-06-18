@@ -17539,10 +17539,6 @@ static int metal_graph_first_token_full_test(
     bool ok = metal_graph_alloc(&g, weights, &weights->layer[0]);
     /* Catch any stale error from model loading/GPU init */
     if (ok && ds4_gpu_synchronize() != 0) {
-        fprintf(stderr, "ds4: STALE ERROR after metal_graph_alloc\n");
-    }
-    g.quality = quality;
-    const bool trace_layers = getenv("DS4_METAL_GRAPH_TRACE_LAYERS") != NULL;
     if (trace_layers && ok) {
         g.materialize_ffn_out = true;
         const bool teacher_force = getenv("DS4_METAL_GRAPH_TEACHER_FORCE") != NULL;
@@ -17614,10 +17610,6 @@ static int metal_graph_first_token_full_test(
                                                      DS4_N_HC) != 0;
         /* Check if embed token caused error */
         if (ok && ds4_gpu_synchronize() != 0) {
-            fprintf(stderr, "ds4: STALE ERROR after graph test embed_token_hc\n");
-        }
-
-        for (uint32_t il = 0; ok && il < DS4_N_LAYER; il++) {
             ok = metal_graph_encode_decode_layer(&g, model, &weights->layer[il],
                                                  il, 0, g.layer_raw_cache[il],
                                                  g.raw_cap, 0, 1, token);
@@ -17630,10 +17622,6 @@ static int metal_graph_first_token_full_test(
         if (ok) ok = ds4_gpu_end_commands() != 0;
         /* Check if decode layers caused error */
         if (ok && ds4_gpu_synchronize() != 0) {
-            fprintf(stderr, "ds4: STALE ERROR after graph test decode layers\n");
-        }
-    }
-
     if (ok) {
         ok = ds4_gpu_tensor_read(g.cur_hc, 0, gpu_hc, hc_dim * sizeof(float)) != 0 &&
              ds4_gpu_tensor_read(g.logits, 0, gpu_logits, vocab_dim * sizeof(float)) != 0;
@@ -17664,6 +17652,8 @@ static int metal_graph_first_token_full_test(
     free(cpu_logits);
     free(gpu_hc);
     free(cpu_hc);
+    /* Clear any stale CUDA error from graph test so it doesn't affect prefill */
+    ds4_gpu_clear_stale_error();
     return ok ? 0 : 1;
 }
 
@@ -18115,10 +18105,6 @@ static bool metal_graph_encode_layer_attention_batch(
     bool ok = hc_mix_view && hc_split_view && attn_cur_view && after_attn_hc_view;
     /* Catch any stale error from previous layer */
     if (ok && ds4_gpu_synchronize() != 0) {
-        fprintf(stderr, "ds4: STALE ERROR at START of attn_batch layer %u\n", il);
-    }
-    const bool fuse_hc_norm = DS4_N_HC == 4 &&
-                              !metal_graph_use_reference_hc_decode() &&
                               metal_graph_enable_batch_hc_norm_fusion();
     if (ok) ok = ds4_gpu_rms_norm_plain_rows_tensor(g->batch_flat_hc,
                                                       g->batch_cur_hc,
@@ -18187,10 +18173,6 @@ static bool metal_graph_encode_layer_attention_batch(
     if (ok && !fuse_hc_norm) {
         /* Catch any stale error from previous kernels */
         if (ds4_gpu_synchronize() != 0) {
-            fprintf(stderr, "ds4: STALE ERROR before rms_norm at layer %u\n", il);
-        }
-        ok = ds4_gpu_rms_norm_weight_rows_tensor(g->batch_attn_norm,
-                                                  g->batch_attn_cur,
                                                   model->map,
                                                   model->size,
                                                   layer->attn_norm->abs_offset,
@@ -21083,10 +21065,8 @@ static bool metal_graph_prefill_layer_major(
     if (n_tokens == 0 || n_tokens > g->prefill_cap) return false;
     if (start > (uint32_t)prompt->len) return false;
     if (n_tokens > (uint32_t)prompt->len - start) return false;
-    /* Catch any stale error from previous operations */
-    if (ds4_gpu_synchronize() != 0) {
-        fprintf(stderr, "ds4: STALE ERROR at START of prefill (start=%u n=%u)\n", start, n_tokens);
-    }
+    /* Clear any stale error from previous operations */
+    ds4_gpu_clear_stale_error();
 
     if (display_progress)
         display_progress(display_progress_ud, "prefill_display", (int)start, prompt->len);
@@ -21132,15 +21112,7 @@ static bool metal_graph_prefill_layer_major(
                                                      n_tokens);
         /* Check if prompt upload caused error */
         if (ok && ds4_gpu_synchronize() != 0) {
-            fprintf(stderr, "ds4: STALE ERROR after prompt embedding upload\n");
-        }
-        if (ok) ok = ds4_gpu_begin_commands() != 0;
-        /* Catch stale error from prompt embedding upload */
         if (ok && ds4_gpu_synchronize() != 0) {
-            fprintf(stderr, "ds4: STALE ERROR before layer loop (from prompt upload)\n");
-        }
-        for (uint32_t il = 0; ok && il < DS4_N_LAYER; il++) {
-            ok = metal_graph_encode_layer_batch(g,
                                                 model,
                                                 &weights->layer[il],
                                                 il,

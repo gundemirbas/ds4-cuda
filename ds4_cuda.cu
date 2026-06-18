@@ -2508,6 +2508,10 @@ extern "C" int ds4_gpu_synchronize(void) {
     return cuda_ok(cudaDeviceSynchronize(), "synchronize");
 }
 
+extern "C" void ds4_gpu_clear_stale_error(void) {
+    (void)cudaGetLastError();
+}
+
 static int cuda_model_set_host_map(const void *model_map, uint64_t model_size) {
     if (!model_map || model_size == 0) return 0;
     const int same_backing_model =
