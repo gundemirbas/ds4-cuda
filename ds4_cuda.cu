@@ -8118,7 +8118,12 @@ extern "C" int ds4_gpu_rms_norm_weight_tensor(ds4_gpu_tensor *out, const ds4_gpu
     float *d_w = NULL;
     const size_t w_bytes = (size_t)n * sizeof(float);
     if (cudaMalloc(&d_w, w_bytes) != cudaSuccess) return 0;
-    cudaMemcpy(d_w, w, w_bytes, cudaMemcpyHostToDevice);
+    /* Copy via CPU buffer: cudaMemcpy can't read mmap directly on GB10 */
+    float *tmp = (float *)malloc(w_bytes);
+    if (!tmp) { cudaFree(d_w); return 0; }
+    memcpy(tmp, w, w_bytes);
+    cudaMemcpy(d_w, tmp, w_bytes, cudaMemcpyHostToDevice);
+    free(tmp);
     rms_norm_weight_kernel<<<1, 256>>>((float *)out->ptr, (const float *)x->ptr, d_w, n, 1, eps);
     int ok = cuda_ok(cudaGetLastError(), "rms_norm_weight launch");
     cudaFree(d_w);
@@ -8135,7 +8140,11 @@ extern "C" int ds4_gpu_rms_norm_weight_rows_tensor(ds4_gpu_tensor *out, const ds
     float *d_w = NULL;
     const size_t w_bytes = (size_t)n * sizeof(float);
     if (cudaMalloc(&d_w, w_bytes) != cudaSuccess) return 0;
-    cudaMemcpy(d_w, w, w_bytes, cudaMemcpyHostToDevice);
+    float *tmp = (float *)malloc(w_bytes);
+    if (!tmp) { cudaFree(d_w); return 0; }
+    memcpy(tmp, w, w_bytes);
+    cudaMemcpy(d_w, tmp, w_bytes, cudaMemcpyHostToDevice);
+    free(tmp);
     rms_norm_weight_kernel<<<rows, 256>>>((float *)out->ptr, (const float *)x->ptr, d_w, n, rows, eps);
     int ok = cuda_ok(cudaGetLastError(), "rms_norm_weight launch");
     cudaFree(d_w);
@@ -8181,8 +8190,14 @@ extern "C" int ds4_gpu_dsv4_qkv_rms_norm_rows_tensor(
             cudaFree(d_q_w); cudaFree(d_kv_w);
             return 0;
         }
-        cudaMemcpy(d_q_w, q_w, q_w_bytes, cudaMemcpyHostToDevice);
-        cudaMemcpy(d_kv_w, kv_w, kv_w_bytes, cudaMemcpyHostToDevice);
+        float *tmp_q = (float *)malloc(q_w_bytes);
+        float *tmp_kv = (float *)malloc(kv_w_bytes);
+        if (!tmp_q || !tmp_kv) { free(tmp_q); free(tmp_kv); cudaFree(d_q_w); cudaFree(d_kv_w); return 0; }
+        memcpy(tmp_q, q_w, q_w_bytes);
+        memcpy(tmp_kv, kv_w, kv_w_bytes);
+        cudaMemcpy(d_q_w, tmp_q, q_w_bytes, cudaMemcpyHostToDevice);
+        cudaMemcpy(d_kv_w, tmp_kv, kv_w_bytes, cudaMemcpyHostToDevice);
+        free(tmp_q); free(tmp_kv);
         dim3 grid(rows, 2u, 1u);
         dsv4_qkv_rms_norm_rows_kernel<<<grid, 256>>>(
                 (float *)q_out->ptr,
