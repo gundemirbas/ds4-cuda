@@ -17537,6 +17537,10 @@ static int metal_graph_first_token_full_test(
 
     ds4_gpu_graph g;
     bool ok = metal_graph_alloc(&g, weights, &weights->layer[0]);
+    /* Catch any stale error from model loading/GPU init */
+    if (ok && ds4_gpu_synchronize() != 0) {
+        fprintf(stderr, "ds4: STALE ERROR after metal_graph_alloc\n");
+    }
     g.quality = quality;
     const bool trace_layers = getenv("DS4_METAL_GRAPH_TRACE_LAYERS") != NULL;
     if (trace_layers && ok) {
