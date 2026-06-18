@@ -2473,47 +2473,84 @@ static int sst_map_layer_tensor(const char *name, char *dst, size_t dst_size) {
     int n = snprintf(dst, dst_size, "layers.%u.", layer);
     if (n < 0) return -1;
     dst += n; dst_size -= (size_t)n; if (dst_size <= 1) return -1;
-    /* Map suffix */
-    if (strcmp(rest, "attn_q_a.weight") == 0)      return snprintf(dst, dst_size, "attn.wq_a.weight") > 0 ? 0 : -1;
-    if (strcmp(rest, "attn_q_a.scale") == 0)       return snprintf(dst, dst_size, "attn.wq_a.scale") > 0 ? 0 : -1;
-    if (strcmp(rest, "attn_q_a_norm.weight") == 0) return snprintf(dst, dst_size, "attn.q_norm.weight") > 0 ? 0 : -1;
-    if (strcmp(rest, "attn_q_b.weight") == 0)      return snprintf(dst, dst_size, "attn.wq_b.weight") > 0 ? 0 : -1;
-    if (strcmp(rest, "attn_q_b.scale") == 0)       return snprintf(dst, dst_size, "attn.wq_b.scale") > 0 ? 0 : -1;
-    if (strcmp(rest, "attn_kv.weight") == 0)       return snprintf(dst, dst_size, "attn.wkv.weight") > 0 ? 0 : -1;
-    if (strcmp(rest, "attn_kv.scale") == 0)        return snprintf(dst, dst_size, "attn.wkv.scale") > 0 ? 0 : -1;
-    if (strcmp(rest, "attn_kv_a_norm.weight") == 0) return snprintf(dst, dst_size, "attn.kv_norm.weight") > 0 ? 0 : -1;
-    if (strcmp(rest, "attn_sinks.weight") == 0)    return snprintf(dst, dst_size, "attn.attn_sink") > 0 ? 0 : -1;
-    if (strcmp(rest, "attn_output_a.weight") == 0) return snprintf(dst, dst_size, "attn.wo_a.weight") > 0 ? 0 : -1;
-    if (strcmp(rest, "attn_output_a.scale") == 0)  return snprintf(dst, dst_size, "attn.wo_a.scale") > 0 ? 0 : -1;
-    if (strcmp(rest, "attn_output_b.weight") == 0) return snprintf(dst, dst_size, "attn.wo_b.weight") > 0 ? 0 : -1;
-    if (strcmp(rest, "attn_output_b.scale") == 0)  return snprintf(dst, dst_size, "attn.wo_b.scale") > 0 ? 0 : -1;
-    if (strcmp(rest, "attn_norm.weight") == 0)     return snprintf(dst, dst_size, "attn_norm.weight") > 0 ? 0 : -1;
-    if (strcmp(rest, "ffn_norm.weight") == 0)      return snprintf(dst, dst_size, "ffn_norm.weight") > 0 ? 0 : -1;
-    if (strcmp(rest, "hc_attn_base") == 0)         return snprintf(dst, dst_size, "hc_attn_base") > 0 ? 0 : -1;
-    if (strcmp(rest, "hc_attn_fn") == 0)           return snprintf(dst, dst_size, "hc_attn_fn") > 0 ? 0 : -1;
-    if (strcmp(rest, "hc_attn_scale") == 0)        return snprintf(dst, dst_size, "hc_attn_scale") > 0 ? 0 : -1;
-    if (strcmp(rest, "hc_ffn_base") == 0)          return snprintf(dst, dst_size, "hc_ffn_base") > 0 ? 0 : -1;
-    if (strcmp(rest, "hc_ffn_fn") == 0)            return snprintf(dst, dst_size, "hc_ffn_fn") > 0 ? 0 : -1;
-    if (strcmp(rest, "hc_ffn_scale") == 0)         return snprintf(dst, dst_size, "hc_ffn_scale") > 0 ? 0 : -1;
-    if (strcmp(rest, "ffn_gate_inp.weight") == 0)  return snprintf(dst, dst_size, "ffn.gate.weight") > 0 ? 0 : -1;
-    if (strcmp(rest, "ffn_gate_shexp.weight") == 0) return snprintf(dst, dst_size, "ffn.shared_experts.w1.weight") > 0 ? 0 : -1;
-    if (strcmp(rest, "ffn_gate_shexp.scale") == 0)  return snprintf(dst, dst_size, "ffn.shared_experts.w1.scale") > 0 ? 0 : -1;
-    if (strcmp(rest, "ffn_up_shexp.weight") == 0)   return snprintf(dst, dst_size, "ffn.shared_experts.w3.weight") > 0 ? 0 : -1;
-    if (strcmp(rest, "ffn_up_shexp.scale") == 0)    return snprintf(dst, dst_size, "ffn.shared_experts.w3.scale") > 0 ? 0 : -1;
-    if (strcmp(rest, "ffn_down_shexp.weight") == 0) return snprintf(dst, dst_size, "ffn.shared_experts.w2.weight") > 0 ? 0 : -1;
-    if (strcmp(rest, "ffn_down_shexp.scale") == 0)  return snprintf(dst, dst_size, "ffn.shared_experts.w2.scale") > 0 ? 0 : -1;
+    /* Map suffix — some safetensors names have .weight suffix, some don't.
+     * HC tensors (hc_attn_base, hc_attn_fn, etc.) have NO .weight suffix.
+     * We check both variants: with and without .weight/.scale suffix. */
+    /* First strip .weight or .scale suffix for comparison */
+    size_t rest_len = strlen(rest);
+    char rest_base[128];
+    int has_weight = 0, has_scale = 0;
+    if (rest_len > 7 && strcmp(rest + rest_len - 7, ".weight") == 0) {
+        memcpy(rest_base, rest, rest_len - 7);
+        rest_base[rest_len - 7] = '\0';
+        has_weight = 1;
+    } else if (rest_len > 6 && strcmp(rest + rest_len - 6, ".scale") == 0) {
+        memcpy(rest_base, rest, rest_len - 6);
+        rest_base[rest_len - 6] = '\0';
+        has_scale = 1;
+    } else {
+        memcpy(rest_base, rest, rest_len + 1); /* no suffix */
+    }
+    
+    /* Attention weight tensors (all have .weight suffix in safetensors) */
+    if (strcmp(rest_base, "attn_q_a") == 0)
+        return snprintf(dst, dst_size, "attn.wq_a%s", has_weight ? ".weight" : "") > 0 ? 0 : -1;
+    if (strcmp(rest_base, "attn_q_b") == 0)
+        return snprintf(dst, dst_size, "attn.wq_b%s", has_weight ? ".weight" : has_scale ? ".scale" : "") > 0 ? 0 : -1;
+    if (strcmp(rest_base, "attn_q_a_norm") == 0)
+        return snprintf(dst, dst_size, "attn.q_norm.weight") > 0 ? 0 : -1;
+    if (strcmp(rest_base, "attn_kv") == 0)
+        return snprintf(dst, dst_size, "attn.wkv%s", has_weight ? ".weight" : has_scale ? ".scale" : "") > 0 ? 0 : -1;
+    if (strcmp(rest_base, "attn_kv_a_norm") == 0)
+        return snprintf(dst, dst_size, "attn.kv_norm.weight") > 0 ? 0 : -1;
+    if (strcmp(rest_base, "attn_sinks") == 0)
+        return snprintf(dst, dst_size, "attn.attn_sink") > 0 ? 0 : -1;
+    if (strcmp(rest_base, "attn_output_a") == 0)
+        return snprintf(dst, dst_size, "attn.wo_a%s", has_weight ? ".weight" : has_scale ? ".scale" : "") > 0 ? 0 : -1;
+    if (strcmp(rest_base, "attn_output_b") == 0)
+        return snprintf(dst, dst_size, "attn.wo_b%s", has_weight ? ".weight" : has_scale ? ".scale" : "") > 0 ? 0 : -1;
+    /* Norm tensors */
+    if (strcmp(rest_base, "attn_norm") == 0)
+        return snprintf(dst, dst_size, "attn_norm.weight") > 0 ? 0 : -1;
+    if (strcmp(rest_base, "ffn_norm") == 0)
+        return snprintf(dst, dst_size, "ffn_norm.weight") > 0 ? 0 : -1;
+    /* HC tensors (no .weight suffix in safetensors) */
+    if (strcmp(rest_base, "hc_attn_base") == 0)  return snprintf(dst, dst_size, "hc_attn_base") > 0 ? 0 : -1;
+    if (strcmp(rest_base, "hc_attn_fn") == 0)    return snprintf(dst, dst_size, "hc_attn_fn") > 0 ? 0 : -1;
+    if (strcmp(rest_base, "hc_attn_scale") == 0) return snprintf(dst, dst_size, "hc_attn_scale") > 0 ? 0 : -1;
+    if (strcmp(rest_base, "hc_ffn_base") == 0)   return snprintf(dst, dst_size, "hc_ffn_base") > 0 ? 0 : -1;
+    if (strcmp(rest_base, "hc_ffn_fn") == 0)     return snprintf(dst, dst_size, "hc_ffn_fn") > 0 ? 0 : -1;
+    if (strcmp(rest_base, "hc_ffn_scale") == 0)  return snprintf(dst, dst_size, "hc_ffn_scale") > 0 ? 0 : -1;
+    /* FFN tensors */
+    if (strcmp(rest_base, "ffn_gate_inp") == 0)
+        return snprintf(dst, dst_size, "ffn.gate.weight") > 0 ? 0 : -1;
+    if (strcmp(rest_base, "ffn_gate_shexp") == 0)
+        return snprintf(dst, dst_size, "ffn.shared_experts.w1%s", has_weight ? ".weight" : has_scale ? ".scale" : "") > 0 ? 0 : -1;
+    if (strcmp(rest_base, "ffn_up_shexp") == 0)
+        return snprintf(dst, dst_size, "ffn.shared_experts.w3%s", has_weight ? ".weight" : has_scale ? ".scale" : "") > 0 ? 0 : -1;
+    if (strcmp(rest_base, "ffn_down_shexp") == 0)
+        return snprintf(dst, dst_size, "ffn.shared_experts.w2%s", has_weight ? ".weight" : has_scale ? ".scale" : "") > 0 ? 0 : -1;
     /* Compressor/Indexer */
-    if (strcmp(rest, "attn_compressor_ape.weight") == 0) return snprintf(dst, dst_size, "attn.compressor.ape.weight") > 0 ? 0 : -1;
-    if (strcmp(rest, "attn_compressor_kv.weight") == 0)  return snprintf(dst, dst_size, "attn.compressor.wkv.weight") > 0 ? 0 : -1;
-    if (strcmp(rest, "attn_compressor_gate.weight") == 0) return snprintf(dst, dst_size, "attn.compressor.wgate.weight") > 0 ? 0 : -1;
-    if (strcmp(rest, "attn_compressor_norm.weight") == 0) return snprintf(dst, dst_size, "attn.compressor.norm.weight") > 0 ? 0 : -1;
-    if (strcmp(rest, "indexer.attn_q_b.weight") == 0)    return snprintf(dst, dst_size, "attn.indexer.wq_b.weight") > 0 ? 0 : -1;
-    if (strcmp(rest, "indexer.attn_q_b.scale") == 0)     return snprintf(dst, dst_size, "attn.indexer.wq_b.scale") > 0 ? 0 : -1;
-    if (strcmp(rest, "indexer.proj.weight") == 0)        return snprintf(dst, dst_size, "attn.indexer.weights_proj.weight") > 0 ? 0 : -1;
-    if (strcmp(rest, "indexer_compressor_ape.weight") == 0) return snprintf(dst, dst_size, "attn.indexer.compressor.ape.weight") > 0 ? 0 : -1;
-    if (strcmp(rest, "indexer_compressor_kv.weight") == 0)  return snprintf(dst, dst_size, "attn.indexer.compressor.wkv.weight") > 0 ? 0 : -1;
-    if (strcmp(rest, "indexer_compressor_gate.weight") == 0) return snprintf(dst, dst_size, "attn.indexer.compressor.wgate.weight") > 0 ? 0 : -1;
-    if (strcmp(rest, "indexer_compressor_norm.weight") == 0) return snprintf(dst, dst_size, "attn.indexer.compressor.norm.weight") > 0 ? 0 : -1;
+    if (strcmp(rest_base, "attn_compressor_ape") == 0)
+        return snprintf(dst, dst_size, "attn.compressor.ape.weight") > 0 ? 0 : -1;
+    if (strcmp(rest_base, "attn_compressor_kv") == 0)
+        return snprintf(dst, dst_size, "attn.compressor.wkv.weight") > 0 ? 0 : -1;
+    if (strcmp(rest_base, "attn_compressor_gate") == 0)
+        return snprintf(dst, dst_size, "attn.compressor.wgate.weight") > 0 ? 0 : -1;
+    if (strcmp(rest_base, "attn_compressor_norm") == 0)
+        return snprintf(dst, dst_size, "attn.compressor.norm.weight") > 0 ? 0 : -1;
+    if (strcmp(rest_base, "indexer.attn_q_b") == 0)
+        return snprintf(dst, dst_size, "attn.indexer.wq_b%s", has_weight ? ".weight" : has_scale ? ".scale" : "") > 0 ? 0 : -1;
+    if (strcmp(rest_base, "indexer.proj") == 0)
+        return snprintf(dst, dst_size, "attn.indexer.weights_proj.weight") > 0 ? 0 : -1;
+    if (strcmp(rest_base, "indexer_compressor_ape") == 0)
+        return snprintf(dst, dst_size, "attn.indexer.compressor.ape.weight") > 0 ? 0 : -1;
+    if (strcmp(rest_base, "indexer_compressor_kv") == 0)
+        return snprintf(dst, dst_size, "attn.indexer.compressor.wkv.weight") > 0 ? 0 : -1;
+    if (strcmp(rest_base, "indexer_compressor_gate") == 0)
+        return snprintf(dst, dst_size, "attn.indexer.compressor.wgate.weight") > 0 ? 0 : -1;
+    if (strcmp(rest_base, "indexer_compressor_norm") == 0)
+        return snprintf(dst, dst_size, "attn.indexer.compressor.norm.weight") > 0 ? 0 : -1;
     /* Expert tensors: return -1 to trigger special handling */
     return -1;
 }
