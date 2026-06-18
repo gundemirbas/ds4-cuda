@@ -3842,6 +3842,11 @@ static DS4_MAYBE_UNUSED uint64_t routed_expert_block_bytes(uint32_t type) {
     case DS4_TENSOR_IQ2_XXS: return sizeof(block_iq2_xxs);
     case DS4_TENSOR_Q2_K:    return sizeof(block_q2_K);
     case DS4_TENSOR_Q4_K:    return sizeof(block_q4_K);
+    case DS4_TENSOR_NVFP4:   return QK_K / 2;   /* 2 4-bit values per byte */
+    case DS4_TENSOR_F8_E4M3: return QK_K;        /* 1 byte per value */
+    case DS4_TENSOR_BF16:    return QK_K * 2;    /* 2 bytes per bf16 */
+    case DS4_TENSOR_F16:     return QK_K * 2;    /* 2 bytes per f16 */
+    case DS4_TENSOR_F32:     return QK_K * 4;    /* 4 bytes per f32 */
     default:                 ds4_die("unsupported routed expert tensor type");
     }
     return 0;
