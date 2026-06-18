@@ -17628,6 +17628,10 @@ static int metal_graph_first_token_full_test(
 
         if (ok) ok = metal_graph_encode_output_head(&g, model, weights, vocab_dim);
         if (ok) ok = ds4_gpu_end_commands() != 0;
+        /* Check if decode layers caused error */
+        if (ok && ds4_gpu_synchronize() != 0) {
+            fprintf(stderr, "ds4: STALE ERROR after graph test decode layers\n");
+        }
     }
 
     if (ok) {
