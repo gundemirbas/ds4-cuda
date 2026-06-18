@@ -8154,7 +8154,7 @@ extern "C" int ds4_gpu_rms_norm_weight_rows_tensor(ds4_gpu_tensor *out, const ds
     free(tmp);
     /* Debug: test each pointer individually */
     {
-        __device__ float test_val = 0;
+        float test_val = 0;
         (void)cudaGetLastError();
         /* Test x_ptr read */
         cudaMemcpy(&test_val, (const float *)x->ptr, sizeof(float), cudaMemcpyDeviceToHost);
