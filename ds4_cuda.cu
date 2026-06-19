@@ -7392,6 +7392,17 @@ extern "C" int ds4_gpu_embed_token_hc_tensor(ds4_gpu_tensor *out_hc, const void 
     if (weight_offset > model_size || weight_bytes > model_size - weight_offset) return 0;
     const char *wptr = cuda_model_range_ptr(model_map, weight_offset, weight_bytes, "token_embd");
     if (!wptr) return 0;
+    /* Debug: check embedding data */
+    {
+        static int dbg = 0;
+        if (dbg < 3) {
+            uint16_t h_emb[4];
+            memcpy(h_emb, wptr + (uint64_t)token * n_embd * sizeof(uint16_t), sizeof(h_emb));
+            fprintf(stderr, "ds4: embed token=%u wptr=%p emb[0..3]=%u %u %u %u (bf16)\n",
+                    token, (void*)wptr, h_emb[0], h_emb[1], h_emb[2], h_emb[3]);
+            dbg++;
+        }
+    }
     /* Copy token row to GPU — UVA pointers from mmap may not be accessible
      * from all kernel address spaces on GB10. */
     const size_t row_bytes = (size_t)n_embd * sizeof(uint16_t);
