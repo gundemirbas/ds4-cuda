@@ -13624,6 +13624,17 @@ int ds4_gpu_matmul_f8e4m3_tensor(
         fprintf(stderr, "ds4: F8 E4M3 GEMV sync error: %s\n", cudaGetErrorString(err));
         return 0;
     }
+    /* Debug: check output for NaN/Inf */
+    {
+        static int dbg = 0;
+        if (dbg < 3) {
+            float h_out[4];
+            cudaMemcpy(h_out, out->ptr, sizeof(h_out), cudaMemcpyDeviceToHost);
+            fprintf(stderr, "ds4: F8 E4M3 GEMV out[0..3] = %f %f %f %f\n",
+                    h_out[0], h_out[1], h_out[2], h_out[3]);
+            dbg++;
+        }
+    }
     return 1;
 }
 
