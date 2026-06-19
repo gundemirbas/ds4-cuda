@@ -13549,9 +13549,8 @@ int ds4_gpu_matmul_nvfp4_tensor(
         ws = (const uint8_t *)cuda_model_range_ptr(model_map, scale_offset, scale_bytes, "nvfp4_scale");
     }
     if (!ws) {
-        /* Fallback: no scale tensor, use unit scales */
-        fprintf(stderr, "ds4: NVFP4 GEMV: no scale tensor at offset %llu\n",
-                (unsigned long long)scale_offset);
+        fprintf(stderr, "ds4: NVFP4 GEMV: no scale tensor at offset %llu (in=%llu out=%llu)\n",
+                (unsigned long long)scale_offset, (unsigned long long)in_dim, (unsigned long long)out_dim);
         return 0;
     }
     
