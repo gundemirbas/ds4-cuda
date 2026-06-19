@@ -286,7 +286,8 @@ int ds4_gpu_shared_gate_up_swiglu_q8_0_tensor(
         uint64_t                in_dim,
         uint64_t                out_dim,
         const ds4_gpu_tensor *x,
-        float                   clamp);
+        float                   clamp,
+        uint32_t                weight_type);
 
 int ds4_gpu_matmul_f16_tensor(
         ds4_gpu_tensor       *out,
@@ -1014,7 +1015,8 @@ int ds4_gpu_shared_down_hc_expand_q8_0_tensor(
         const ds4_gpu_tensor *residual_hc,
         const ds4_gpu_tensor *split,
         uint32_t                n_embd,
-        uint32_t                n_hc);
+        uint32_t                n_hc,
+        uint32_t                weight_type);
 
 int ds4_gpu_matmul_q8_0_hc_expand_tensor(
         ds4_gpu_tensor       *out_hc,
@@ -1028,7 +1030,8 @@ int ds4_gpu_matmul_q8_0_hc_expand_tensor(
         const ds4_gpu_tensor *residual_hc,
         const ds4_gpu_tensor *split,
         uint32_t                n_embd,
-        uint32_t                n_hc);
+        uint32_t                n_hc,
+        uint32_t                weight_type);
 
 /* =========================================================================
  * NVFP4/FP8 Operations (ds4-cuda)
