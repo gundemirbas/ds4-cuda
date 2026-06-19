@@ -2209,10 +2209,6 @@ static bool model_open_safetensors(ds4_model *m, const char *model_dir,
             
             /* Look up block scale tensor for NVFP4 and F8_E4M3 weights */
             if (t->type == DS4_TENSOR_NVFP4 || t->type == DS4_TENSOR_F8_E4M3) {
-                /* Construct scale tensor name:
-                 *   "layers.X.attn.wq_a.weight" → "layers.X.attn.wq_a.scale"
-                 *   "layers.X.ffn.experts.Y.w1.weight" → "layers.X.ffn.experts.Y.w1.weight_scale"
-                 *   For NVFP4 also look for "weight_scale" (expert format) */
                 char scale_name[256];
                 const char *dot_pos = strrchr(st->name, '.');
                 if (dot_pos && dot_pos != st->name && strcmp(dot_pos, ".weight") == 0) {
@@ -2221,23 +2217,28 @@ static bool model_open_safetensors(ds4_model *m, const char *model_dir,
                         /* Try .scale first (attention format) */
                         memcpy(scale_name, st->name, base_len);
                         strcpy(scale_name + base_len, ".scale");
-                        /* Search for scale tensor in all shards */
-                        for (uint64_t si = 0; si < ti && t->scale_offset == 0; si++) {
+                        /* Search ALL loaded tensors (not just previous ones) */
+                        for (uint64_t si = 0; si < ti; si++) {
                             ds4_tensor *st2 = &m->tensors[si];
                             if (st2->name.ptr && strcmp(st2->name.ptr, scale_name) == 0) {
                                 t->scale_offset = st2->abs_offset;
+                                break;
                             }
                         }
                         /* Try .weight_scale (expert format) */
                         if (t->scale_offset == 0 && base_len + 13 < sizeof(scale_name)) {
                             memcpy(scale_name, st->name, base_len);
                             strcpy(scale_name + base_len, ".weight_scale");
-                            for (uint64_t si = 0; si < ti && t->scale_offset == 0; si++) {
+                            for (uint64_t si = 0; si < ti; si++) {
                                 ds4_tensor *st2 = &m->tensors[si];
                                 if (st2->name.ptr && strcmp(st2->name.ptr, scale_name) == 0) {
                                     t->scale_offset = st2->abs_offset;
+                                    break;
                                 }
                             }
+                        }
+                        if (t->scale_offset == 0) {
+                            fprintf(stderr, "ds4: WARNING: no scale tensor for %s (searched %s)\n", st->name, scale_name);
                         }
                     }
                 }
