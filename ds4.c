@@ -2250,6 +2250,46 @@ static bool model_open_safetensors(ds4_model *m, const char *model_dir,
         }
     }
     
+    /* Second pass: find scale tensors for NVFP4/F8 weights.
+     * Scale tensors may come AFTER weight tensors in safetensors files,
+     * so the first pass couldn't find them. */
+    for (uint64_t i = 0; i < (uint64_t)ti; i++) {
+        ds4_tensor *t = &m->tensors[i];
+        if (t->scale_offset != 0) continue;  /* already found */
+        if (t->type != DS4_TENSOR_NVFP4 && t->type != DS4_TENSOR_F8_E4M3) continue;
+        if (!t->name.ptr) continue;
+        
+        const char *dot_pos = strrchr(t->name.ptr, '.');
+        if (!dot_pos || dot_pos == t->name.ptr || strcmp(dot_pos, ".weight") != 0) continue;
+        
+        size_t base_len = (size_t)(dot_pos - t->name.ptr);
+        char scale_name[256];
+        if (base_len + 6 >= sizeof(scale_name)) continue;
+        
+        /* Try .scale first (attention format) */
+        memcpy(scale_name, t->name.ptr, base_len);
+        strcpy(scale_name + base_len, ".scale");
+        for (uint64_t j = 0; j < (uint64_t)ti; j++) {
+            ds4_tensor *st2 = &m->tensors[j];
+            if (st2->name.ptr && strcmp(st2->name.ptr, scale_name) == 0) {
+                t->scale_offset = st2->abs_offset;
+                break;
+            }
+        }
+        /* Try .weight_scale (expert format) */
+        if (t->scale_offset == 0 && base_len + 13 < sizeof(scale_name)) {
+            memcpy(scale_name, t->name.ptr, base_len);
+            strcpy(scale_name + base_len, ".weight_scale");
+            for (uint64_t j = 0; j < (uint64_t)ti; j++) {
+                ds4_tensor *st2 = &m->tensors[j];
+                if (st2->name.ptr && strcmp(st2->name.ptr, scale_name) == 0) {
+                    t->scale_offset = st2->abs_offset;
+                    break;
+                }
+            }
+        }
+    }
+    
     /* Store shard info for multi-shard data access */
     m->shard_count = sst->n_models;
     m->shard_models = sst;  /* Keep sst alive — we own it now */
