@@ -13937,8 +13937,11 @@ extern "C" void ds4_launch_mmq_nvfp4(
 
 __device__ __forceinline__ float d_f8e4m3(uint8_t v) {
     if (!v) return 0.0f;
-    unsigned s = (v >> 7) & 1u, e = (v >> 4) & 7u, m = v & 0xFu;
-    float val = (e == 0) ? (float)m / 8.0f : (float)(m + 16) / 16.0f * ldexpf(1.0f, (int)e - 7);
+    unsigned s = (v >> 7) & 1;
+    unsigned e = (v >> 3) & 0xF;
+    unsigned m = v & 0x7;
+    float val = (e == 0) ? (float)m / 64.0f
+                         : (float)(m + 8) / 8.0f * __powf(2.0f, (int)e - 7);
     return s ? -val : val;
 }
 
