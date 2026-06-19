@@ -13566,6 +13566,11 @@ int ds4_gpu_matmul_nvfp4_tensor(
         fprintf(stderr, "ds4: NVFP4 GEMV launch error: %s\n", cudaGetErrorString(err));
         return 0;
     }
+    err = cudaDeviceSynchronize();
+    if (err != cudaSuccess) {
+        fprintf(stderr, "ds4: NVFP4 GEMV sync error: %s\n", cudaGetErrorString(err));
+        return 0;
+    }
     return 1;
 }
 
@@ -13611,6 +13616,12 @@ int ds4_gpu_matmul_f8e4m3_tensor(
     cudaError_t err = cudaGetLastError();
     if (err != cudaSuccess) {
         fprintf(stderr, "ds4: F8 E4M3 GEMV launch error: %s\n", cudaGetErrorString(err));
+        return 0;
+    }
+    /* Check for async errors */
+    err = cudaDeviceSynchronize();
+    if (err != cudaSuccess) {
+        fprintf(stderr, "ds4: F8 E4M3 GEMV sync error: %s\n", cudaGetErrorString(err));
         return 0;
     }
     return 1;
