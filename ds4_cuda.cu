@@ -3395,18 +3395,48 @@ extern "C" int ds4_gpu_stream_expert_cache_seed_experts(
     return 1;
 }
 
+/* BF16 to F32 conversion */
+__device__ __forceinline__ float bf16_to_float(unsigned short bf16) {
+    /* BF16: 1 sign, 8 exponent, 7 mantissa */
+    unsigned int sign = (bf16 >> 15) & 1;
+    unsigned int exp = (bf16 >> 7) & 0xFF;
+    unsigned int mant = bf16 & 0x7F;
+    unsigned int f32_bits;
+    if (exp == 0) {
+        if (mant == 0) {
+            f32_bits = sign << 31;  /* zero */
+        } else {
+            /* Subnormal */
+            exp = 1;
+            while (!(mant & 0x40)) {
+                mant <<= 1;
+                exp--;
+            }
+            mant &= 0x7F;
+            f32_bits = (sign << 31) | ((uint32_t)(exp + 127 - 127) << 23) | (mant << 16);
+        }
+    } else if (exp == 0xFF) {
+        f32_bits = (sign << 31) | 0x7F800000 | (mant << 16);  /* inf/nan */
+    } else {
+        f32_bits = (sign << 31) | ((uint32_t)(exp - 127 + 127) << 23) | (mant << 16);
+    }
+    float result;
+    memcpy(&result, &f32_bits, sizeof(result));
+    return result;
+}
+
 __global__ static void embed_token_hc_kernel(float *out, const unsigned short *w, uint32_t token, uint32_t n_embd, uint32_t n_hc) {
     uint32_t i = blockIdx.x * blockDim.x + threadIdx.x;
     uint32_t n = n_embd * n_hc;
     if (i >= n) return;
     uint32_t e = i % n_embd;
-    out[i] = __half2float(reinterpret_cast<const __half *>(w)[(uint64_t)token * n_embd + e]);
+    out[i] = bf16_to_float(w[(uint64_t)token * n_embd + e]);
 }
 
 __global__ static void embed_tokens_hc_kernel(
         float *out,
         const int32_t *tokens,
-        const __half *w,
+        const unsigned short *w,
         uint32_t n_vocab,
         uint32_t n_tokens,
         uint32_t n_embd,
@@ -3420,7 +3450,7 @@ __global__ static void embed_tokens_hc_kernel(
     int32_t tok_i = tokens[t];
     uint32_t tok = tok_i < 0 ? 0u : (uint32_t)tok_i;
     if (tok >= n_vocab) tok = 0;
-    out[gid] = __half2float(w[(uint64_t)tok * n_embd + d]);
+    out[gid] = bf16_to_float(w[(uint64_t)tok * n_embd + d]);
 }
 
 __global__ static void matmul_f16_kernel(
@@ -7405,7 +7435,7 @@ extern "C" int ds4_gpu_embed_tokens_hc_tensor(
     embed_tokens_hc_kernel<<<(n + 255) / 256, 256>>>(
         (float *)out_hc->ptr,
         (const int32_t *)tokens_t->ptr,
-        (const __half *)wptr,
+        (const unsigned short *)wptr,
         n_vocab, n_tokens, n_embd, n_hc);
     return cuda_ok(cudaGetLastError(), "embed tokens launch");
 }
