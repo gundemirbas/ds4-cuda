@@ -13561,7 +13561,18 @@ int ds4_gpu_matmul_f8e4m3_tensor(
     /* FP8 E4M3: weight layout is [out_dim][in_dim bytes] */
     uint64_t weight_bytes = out_dim * in_dim;
     const char *w = cuda_model_range_ptr(model_map, weight_offset, weight_bytes, "f8_e4m3");
-    if (!w) return 0;
+    if (!w) {
+        fprintf(stderr, "ds4: F8 E4M3 GEMV: wptr NULL at offset=%llu size=%llu\n",
+                (unsigned long long)weight_offset, (unsigned long long)weight_bytes);
+        return 0;
+    }
+    /* Check if pointer is device-accessible */
+    cudaPointerAttributes attr;
+    cudaError_t pat = cudaPointerGetAttributes(&attr, w);
+    if (pat != cudaSuccess) {
+        fprintf(stderr, "ds4: F8 E4M3 GEMV: pointer not accessible: %s\n", cudaGetErrorString(pat));
+        return 0;
+    }
     /* Clear stale errors before launch */
     (void)cudaGetLastError();
     launch_gemv_f8e4m3((const float*)x->ptr, (const uint8_t*)w,
