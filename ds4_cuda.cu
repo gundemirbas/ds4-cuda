@@ -7418,6 +7418,17 @@ extern "C" int ds4_gpu_embed_token_hc_tensor(ds4_gpu_tensor *out_hc, const void 
     embed_token_hc_kernel<<<(n + 255) / 256, 256>>>((float *)out_hc->ptr, (const unsigned short *)d_row, 0, n_embd, n_hc);
     int ok = cuda_ok(cudaGetLastError(), "embed token launch");
     cudaFree(d_row);
+    /* Debug: check embedding output */
+    {
+        static int dbg = 0;
+        if (dbg < 3) {
+            float h_out[4];
+            cudaMemcpy(h_out, out_hc->ptr, sizeof(h_out), cudaMemcpyDeviceToHost);
+            fprintf(stderr, "ds4: embed output[0..3]=%f %f %f %f\n",
+                    h_out[0], h_out[1], h_out[2], h_out[3]);
+            dbg++;
+        }
+    }
     return ok;
 }
 
