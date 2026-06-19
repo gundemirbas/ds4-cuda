@@ -13368,7 +13368,7 @@ extern "C" int ds4_gpu_shared_down_hc_expand_q8_0_tensor(
     if (weight_type == 35 /* NVFP4 */ || weight_type == 34 /* F8_E4M3 */) {
         int ok = ds4_gpu_matmul_nvfp4_tensor(shared_out, model_map, model_size,
                                               weight_offset, in_dim, out_dim,
-                                              shared_mid, 1, 0);
+                                              shared_mid, 1, scale_offset);
         if (ok) ok = ds4_gpu_hc_expand_add_split_tensor(out_hc, shared_out, routed_out,
                                                          residual_hc, split, n_embd, n_hc);
         return ok;
@@ -13410,7 +13410,7 @@ extern "C" int ds4_gpu_matmul_q8_0_hc_expand_tensor(
     /* For NVFP4/F8: use separate matmul + hc expand */
     if (weight_type == 35 /* NVFP4 */ || weight_type == 34 /* F8_E4M3 */) {
         int ok = ds4_gpu_matmul_nvfp4_tensor(block_out, model_map, model_size,
-                                              weight_offset, in_dim, out_dim, x, 1, 0);
+                                              weight_offset, in_dim, out_dim, x, 1, scale_offset);
         if (ok) ok = ds4_gpu_hc_expand_add_split_tensor(out_hc, block_out, NULL,
                                                          residual_hc, split, n_embd, n_hc);
         return ok;
