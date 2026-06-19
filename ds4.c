@@ -1622,6 +1622,7 @@ typedef struct {
     uint64_t abs_offset;
     uint64_t elements;
     uint64_t bytes;
+    uint64_t scale_offset;  /* offset of block scale tensor (0 if none) */
 } ds4_tensor;
 
 typedef struct {
@@ -2204,6 +2205,43 @@ static bool model_open_safetensors(ds4_model *m, const char *model_dir,
             t->abs_offset = shard_virt_offset + st->data_offset;
             t->rel_offset = shard_virt_offset + st->data_offset;
             t->bytes = st->data_size;
+            t->scale_offset = 0;  /* will be set below if scale tensor exists */
+            
+            /* Look up block scale tensor for NVFP4 and F8_E4M3 weights */
+            if (t->type == DS4_TENSOR_NVFP4 || t->type == DS4_TENSOR_F8_E4M3) {
+                /* Construct scale tensor name:
+                 *   "layers.X.attn.wq_a.weight" → "layers.X.attn.wq_a.scale"
+                 *   "layers.X.ffn.experts.Y.w1.weight" → "layers.X.ffn.experts.Y.w1.weight_scale"
+                 *   For NVFP4 also look for "weight_scale" (expert format) */
+                char scale_name[256];
+                const char *dot_pos = strrchr(st->name, '.');
+                if (dot_pos && dot_pos != st->name && strcmp(dot_pos, ".weight") == 0) {
+                    size_t base_len = (size_t)(dot_pos - st->name);
+                    if (base_len + 6 < sizeof(scale_name)) {
+                        /* Try .scale first (attention format) */
+                        memcpy(scale_name, st->name, base_len);
+                        strcpy(scale_name + base_len, ".scale");
+                        /* Search for scale tensor in all shards */
+                        for (uint64_t si = 0; si < ti && t->scale_offset == 0; si++) {
+                            ds4_tensor *st2 = &m->tensors[si];
+                            if (st2->name.ptr && strcmp(st2->name.ptr, scale_name) == 0) {
+                                t->scale_offset = st2->abs_offset;
+                            }
+                        }
+                        /* Try .weight_scale (expert format) */
+                        if (t->scale_offset == 0 && base_len + 13 < sizeof(scale_name)) {
+                            memcpy(scale_name, st->name, base_len);
+                            strcpy(scale_name + base_len, ".weight_scale");
+                            for (uint64_t si = 0; si < ti && t->scale_offset == 0; si++) {
+                                ds4_tensor *st2 = &m->tensors[si];
+                                if (st2->name.ptr && strcmp(st2->name.ptr, scale_name) == 0) {
+                                    t->scale_offset = st2->abs_offset;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
         }
         /* Update shard_virt_offset for next shard (page-aligned) */
         if (shard + 1 < sst->n_models) {
@@ -5607,7 +5645,7 @@ static void __attribute__((unused)) matvec_nvfp4_dispatch(ds4_gpu_tensor *out, c
                                    const void *model_map, uint64_t model_size,
                                    uint64_t weight_offset, uint64_t in_dim, uint64_t out_dim) {
     ds4_gpu_matmul_nvfp4_tensor(out, model_map, model_size,
-                                 weight_offset, in_dim, out_dim, x, 1);
+                                 weight_offset, in_dim, out_dim, x, 1, 0);
 }
 
 /* FP8 E4M3 GEMV dispatch — uses tensor core on sm_121a */
@@ -5615,7 +5653,7 @@ static void __attribute__((unused)) matvec_f8e4m3_dispatch(ds4_gpu_tensor *out, 
                                     const void *model_map, uint64_t model_size,
                                     uint64_t weight_offset, uint64_t in_dim, uint64_t out_dim) {
     ds4_gpu_matmul_f8e4m3_tensor(out, model_map, model_size,
-                                  weight_offset, in_dim, out_dim, x, 1);
+                                  weight_offset, in_dim, out_dim, x, 1, 0);
 }
 
 /* Weight type dispatch — selects NVFP4/FP8/Q8_0 based on tensor type */
@@ -5633,10 +5671,10 @@ static int __attribute__((unused)) matmul_weight_dispatch(
     switch (weight_type) {
     case DS4_TENSOR_NVFP4:
         return ds4_gpu_matmul_nvfp4_tensor(out, model_map, model_size,
-                                            weight_offset, in_dim, out_dim, x, n_tok);
+                                            weight_offset, in_dim, out_dim, x, n_tok, 0);
     case DS4_TENSOR_F8_E4M3:
         return ds4_gpu_matmul_f8e4m3_tensor(out, model_map, model_size,
-                                             weight_offset, in_dim, out_dim, x, n_tok);
+                                             weight_offset, in_dim, out_dim, x, n_tok, 0);
     case DS4_TENSOR_F16:
     case DS4_TENSOR_BF16:
         return ds4_gpu_matmul_f16_tensor(out, model_map, model_size,
@@ -5664,10 +5702,11 @@ static int matmul_auto_tensor(
     uint64_t                out_dim,
     const ds4_gpu_tensor   *x,
     uint64_t                n_tok,
-    uint32_t                weight_type) {
+    uint32_t                weight_type,
+    uint64_t                scale_offset) {
     return ds4_gpu_matmul_tensor(out, model_map, model_size,
                                   weight_offset, in_dim, out_dim, x, n_tok,
-                                  (int)weight_type);
+                                  (int)weight_type, scale_offset);
 }
 
 /* Type-aware paired matmul dispatch — for qkv pair and gate+up pair */
@@ -5683,13 +5722,15 @@ static int matmul_pair_auto_tensor(
     uint64_t                out1_dim,
     const ds4_gpu_tensor   *x,
     uint64_t                n_tok,
-    uint32_t                weight_type) {
+    uint32_t                weight_type,
+    uint64_t                scale_offset0,
+    uint64_t                scale_offset1) {
     /* For NVFP4 and F8_E4M3, do two separate matmuls */
     if (weight_type == DS4_TENSOR_NVFP4 || weight_type == DS4_TENSOR_F8_E4M3) {
         return matmul_auto_tensor(out0, model_map, model_size, weight0_offset,
-                                   in_dim, out0_dim, x, n_tok, weight_type) &&
+                                   in_dim, out0_dim, x, n_tok, weight_type, scale_offset0) &&
                matmul_auto_tensor(out1, model_map, model_size, weight1_offset,
-                                   in_dim, out1_dim, x, n_tok, weight_type);
+                                   in_dim, out1_dim, x, n_tok, weight_type, scale_offset1);
     }
     /* For Q8_0, use optimized pair kernel */
     return ds4_gpu_matmul_q8_0_pair_tensor(out0, out1, model_map, model_size,
@@ -5973,7 +6014,7 @@ static void matmul_tensor_batch(
     }
     ds4_gpu_tensor_write(gx, 0, x, (uint64_t)n_tok * in_dim * sizeof(float));
     if (!ds4_gpu_matmul_tensor(gout, m->map, m->size, w->abs_offset,
-                                in_dim, out_dim, gx, n_tok, w->type)) {
+                                in_dim, out_dim, gx, n_tok, w->type, w->scale_offset)) {
         fprintf(stderr, "ds4: matmul_tensor_batch failed for type=%u\n", w->type);
     }
     ds4_gpu_tensor_read(gout, 0, out, (uint64_t)n_tok * out_dim * sizeof(float));
@@ -15733,7 +15774,9 @@ static bool metal_graph_encode_decode_layer(
                                                              DS4_N_HEAD_DIM,
                                                              g->attn_norm,
                                                              1,
-                                                             layer->attn_q_a->type) != 0;
+                                                             layer->attn_q_a->type,
+                                                             layer->attn_q_a->scale_offset,
+                                                             layer->attn_kv->scale_offset) != 0;
     }
     if (ok && !qkv_pair_projected) ok = matmul_auto_tensor(g->qr,
                                                                     model->map,
@@ -15743,7 +15786,7 @@ static bool metal_graph_encode_decode_layer(
                                                                     q_rank,
                                                                     g->attn_norm,
                                                                     1,
-                                                                    layer->attn_q_a->type) != 0;
+                                                                    layer->attn_q_a->type, layer->attn_q_a->scale_offset) != 0;
     if (ok) {
         metal_graph_debug_dump_tensor("q_lora", g->qr, q_rank, il, pos);
     }
@@ -15752,7 +15795,7 @@ static bool metal_graph_encode_decode_layer(
                                                   layer->attn_kv->abs_offset,
                                                   DS4_N_EMBD, DS4_N_HEAD_DIM,
                                                   g->attn_norm, 1,
-                                                  layer->attn_kv->type) != 0;
+                                                  layer->attn_kv->type, layer->attn_kv->scale_offset) != 0;
         if (ok) {
             metal_graph_debug_dump_tensor("KVraw", g->kv_raw, DS4_N_HEAD_DIM, il, pos);
         }
@@ -15784,7 +15827,7 @@ static bool metal_graph_encode_decode_layer(
                                               layer->attn_q_b->abs_offset,
                                               q_rank, q_dim,
                                               g->qr_norm, 1,
-                                              layer->attn_q_b->type) != 0;
+                                              layer->attn_q_b->type, layer->attn_q_b->scale_offset) != 0;
     if (ok) {
         metal_graph_debug_dump_tensor("Qraw", g->q, q_dim, il, pos);
     }
@@ -15828,7 +15871,7 @@ static bool metal_graph_encode_decode_layer(
                                                   layer->attn_kv->abs_offset,
                                                   DS4_N_EMBD, DS4_N_HEAD_DIM,
                                                   g->attn_norm, 1,
-                                                  layer->attn_kv->type) != 0;
+                                                  layer->attn_kv->type, layer->attn_kv->scale_offset) != 0;
         if (ok) {
             metal_graph_debug_dump_tensor("KVraw", g->kv_raw, DS4_N_HEAD_DIM, il, pos);
         }
@@ -16244,7 +16287,7 @@ static bool metal_graph_encode_decode_layer(
                                                         g->hc_split,
                                                         DS4_N_EMBD,
                                                         DS4_N_HC,
-                                                        layer->attn_output_b->type) != 0;
+                                                        layer->attn_output_b->type, layer->attn_output_b->scale_offset) != 0;
         }
     } else if (ok) {
         ok = ds4_gpu_attention_output_q8_batch_tensor(g->attn_out,
@@ -16457,18 +16500,18 @@ static bool metal_graph_encode_decode_layer(
                                                              shared_dim,
                                                              g->ffn_norm,
                                                              DS4_SWIGLU_CLAMP_EXP,
-                                                             layer->ffn_gate_shexp->type) != 0;
+                                                             layer->ffn_gate_shexp->type, layer->ffn_gate_shexp->scale_offset) != 0;
         } else if (ok) {
             if (ok) ok = matmul_auto_tensor(g->shared_gate, model->map, model->size,
                                                       layer->ffn_gate_shexp->abs_offset,
                                                       DS4_N_EMBD, shared_dim,
                                                       g->ffn_norm, 1,
-                                                      layer->ffn_gate_shexp->type) != 0;
+                                                      layer->ffn_gate_shexp->type, layer->ffn_gate_shexp->scale_offset) != 0;
             if (ok) ok = matmul_auto_tensor(g->shared_up, model->map, model->size,
                                                       layer->ffn_up_shexp->abs_offset,
                                                       DS4_N_EMBD, shared_dim,
                                                       g->ffn_norm, 1,
-                                                      layer->ffn_up_shexp->type) != 0;
+                                                      layer->ffn_up_shexp->type, layer->ffn_up_shexp->scale_offset) != 0;
             if (ok) ok = ds4_gpu_swiglu_tensor(g->shared_mid, g->shared_gate, g->shared_up,
                                                shared_dim, DS4_SWIGLU_CLAMP_EXP, 1.0f) != 0;
         }
@@ -16519,13 +16562,13 @@ static bool metal_graph_encode_decode_layer(
                                                              g->hc_split,
                                                              DS4_N_EMBD,
                                                              DS4_N_HC,
-                                                             layer->ffn_down_shexp->type) != 0;
+                                                             layer->ffn_down_shexp->type, layer->ffn_down_shexp->scale_offset) != 0;
         } else if (ok) {
             ok = matmul_auto_tensor(g->shared_out, model->map, model->size,
                                               layer->ffn_down_shexp->abs_offset,
                                               shared_dim, DS4_N_EMBD,
                                               g->shared_mid, 1,
-                                              layer->ffn_down_shexp->type) != 0;
+                                              layer->ffn_down_shexp->type, layer->ffn_down_shexp->scale_offset) != 0;
         }
         DS4_METAL_PROFILE_DECODE_STAGE("shared_down");
         if (ok) {
@@ -16598,18 +16641,18 @@ static bool metal_graph_encode_decode_layer(
                                                              shared_dim,
                                                              g->ffn_norm,
                                                              DS4_SWIGLU_CLAMP_EXP,
-                                                             layer->ffn_gate_shexp->type) != 0;
+                                                             layer->ffn_gate_shexp->type, layer->ffn_gate_shexp->scale_offset) != 0;
         } else if (ok) {
             if (ok) ok = matmul_auto_tensor(g->shared_gate, model->map, model->size,
                                                       layer->ffn_gate_shexp->abs_offset,
                                                       DS4_N_EMBD, shared_dim,
                                                       g->ffn_norm, 1,
-                                                      layer->ffn_gate_shexp->type) != 0;
+                                                      layer->ffn_gate_shexp->type, layer->ffn_gate_shexp->scale_offset) != 0;
             if (ok) ok = matmul_auto_tensor(g->shared_up, model->map, model->size,
                                                       layer->ffn_up_shexp->abs_offset,
                                                       DS4_N_EMBD, shared_dim,
                                                       g->ffn_norm, 1,
-                                                      layer->ffn_up_shexp->type) != 0;
+                                                      layer->ffn_up_shexp->type, layer->ffn_up_shexp->scale_offset) != 0;
             if (ok) ok = ds4_gpu_swiglu_tensor(g->shared_mid, g->shared_gate, g->shared_up,
                                                shared_dim, DS4_SWIGLU_CLAMP_EXP, 1.0f) != 0;
         }
@@ -16619,7 +16662,7 @@ static bool metal_graph_encode_decode_layer(
                                               layer->ffn_down_shexp->abs_offset,
                                               shared_dim, DS4_N_EMBD,
                                               g->shared_mid, 1,
-                                              layer->ffn_down_shexp->type) != 0;
+                                              layer->ffn_down_shexp->type, layer->ffn_down_shexp->scale_offset) != 0;
         }
         DS4_METAL_PROFILE_DECODE_STAGE("shared_down");
         if (async_load_started) {
@@ -16698,7 +16741,7 @@ static bool metal_graph_encode_decode_layer(
                                                              g->hc_split,
                                                              DS4_N_EMBD,
                                                              DS4_N_HC,
-                                                             layer->ffn_down_shexp->type) != 0;
+                                                             layer->ffn_down_shexp->type, layer->ffn_down_shexp->scale_offset) != 0;
         }
         DS4_METAL_PROFILE_DECODE_STAGE("shared_down");
         if (ok) {
@@ -16787,18 +16830,18 @@ static bool metal_graph_encode_decode_layer(
                                                          shared_dim,
                                                          g->ffn_norm,
                                                          DS4_SWIGLU_CLAMP_EXP,
-                                                         layer->ffn_gate_shexp->type) != 0;
+                                                         layer->ffn_gate_shexp->type, layer->ffn_gate_shexp->scale_offset) != 0;
     } else {
         if (ok) ok = matmul_auto_tensor(g->shared_gate, model->map, model->size,
                                                   layer->ffn_gate_shexp->abs_offset,
                                                   DS4_N_EMBD, shared_dim,
                                                   g->ffn_norm, 1,
-                                                  layer->ffn_gate_shexp->type) != 0;
+                                                  layer->ffn_gate_shexp->type, layer->ffn_gate_shexp->scale_offset) != 0;
         if (ok) ok = matmul_auto_tensor(g->shared_up, model->map, model->size,
                                                   layer->ffn_up_shexp->abs_offset,
                                                   DS4_N_EMBD, shared_dim,
                                                   g->ffn_norm, 1,
-                                                  layer->ffn_up_shexp->type) != 0;
+                                                  layer->ffn_up_shexp->type, layer->ffn_up_shexp->scale_offset) != 0;
         if (ok) ok = ds4_gpu_swiglu_tensor(g->shared_mid, g->shared_gate, g->shared_up,
                                            shared_dim, DS4_SWIGLU_CLAMP_EXP, 1.0f) != 0;
     }
@@ -16817,13 +16860,13 @@ static bool metal_graph_encode_decode_layer(
                                                          g->hc_split,
                                                          DS4_N_EMBD,
                                                          DS4_N_HC,
-                                                         layer->ffn_down_shexp->type) != 0;
+                                                         layer->ffn_down_shexp->type, layer->ffn_down_shexp->scale_offset) != 0;
     } else if (ok) {
         ok = matmul_auto_tensor(g->shared_out, model->map, model->size,
                                           layer->ffn_down_shexp->abs_offset,
                                           shared_dim, DS4_N_EMBD,
                                           g->shared_mid, 1,
-                                          layer->ffn_down_shexp->type) != 0;
+                                          layer->ffn_down_shexp->type, layer->ffn_down_shexp->scale_offset) != 0;
     }
     DS4_METAL_PROFILE_DECODE_STAGE("shared_down");
     if (ok) {
@@ -16880,7 +16923,8 @@ static bool metal_graph_encode_output_head(
                                              DS4_N_HC,
                                              g->flat_hc,
                                              1,
-                                             weights->output_hc_fn->type) != 0;
+                                             weights->output_hc_fn->type,
+                                             weights->output_hc_fn->scale_offset) != 0;
     if (ok) {
         metal_graph_debug_dump_tensor("result_hc_pre", g->output_pre, DS4_N_HC, DS4_N_LAYER, 0);
     }
@@ -16921,7 +16965,7 @@ static bool metal_graph_encode_output_head(
                                               vocab_dim,
                                               g->output_norm,
                                               1,
-                                              weights->output->type) != 0;
+                                              weights->output->type, weights->output->scale_offset) != 0;
     if (ok) {
         metal_graph_debug_dump_tensor("result_output", g->logits, vocab_dim, DS4_N_LAYER, 0);
     }
@@ -16982,7 +17026,7 @@ static bool metal_graph_encode_output_head_batch(
                                              DS4_N_HC,
                                              g->batch_flat_hc,
                                              n_tokens,
-                                             weights->output_hc_fn->type) != 0;
+                                             weights->output_hc_fn->type, weights->output_hc_fn->scale_offset);
     if (ok) ok = ds4_gpu_output_hc_weights_tensor(output_weights,
                                                     output_pre,
                                                     model->map,
@@ -17012,7 +17056,7 @@ static bool metal_graph_encode_output_head_batch(
                                               vocab_dim,
                                               output_norm,
                                               n_tokens,
-                                              weights->output->type) != 0;
+                                              weights->output->type, weights->output->scale_offset) != 0;
 
     ds4_gpu_tensor_free(logits);
     ds4_gpu_tensor_free(output_norm);
@@ -17069,7 +17113,7 @@ static bool metal_graph_matmul_q8_0_named_tensor(
                                            out_dim,
                                            x,
                                            n_tok,
-                                           w->type) != 0;
+                                           w->type, w->scale_offset);
     return ok;
 }
 
@@ -17112,7 +17156,7 @@ static bool metal_graph_encode_output_head_mtp(
                                               vocab_dim,
                                               g->output_norm,
                                               1,
-                                              base_weights->output->type) != 0;
+                                              base_weights->output->type, base_weights->output->scale_offset) != 0;
     return ok;
 }
 
@@ -18014,7 +18058,7 @@ static bool metal_graph_warmup_prefill_kernels(
                                          mix_hc,
                                          g->batch_flat_hc,
                                          n_tokens,
-                                         weights->layer[0].hc_attn_fn->type) != 0;
+                                         weights->layer[0].hc_attn_fn->type, weights->layer[0].hc_attn_fn->scale_offset);
     }
     if (ok) ok = ds4_gpu_end_commands() != 0;
     if (!ok) {
@@ -18187,7 +18231,7 @@ static bool metal_graph_encode_layer_attention_batch(
                                              mix_hc,
                                              g->batch_flat_hc,
                                              n_tokens,
-                                             layer->hc_attn_fn->type) != 0;
+                                             layer->hc_attn_fn->type, layer->hc_attn_fn->scale_offset);
     if (metal_graph_use_reference_hc_decode()) {
         if (ok) ok = ds4_gpu_hc_split_sinkhorn_tensor(hc_split_view,
                                                         hc_mix_view,
@@ -19639,7 +19683,7 @@ static bool metal_graph_encode_layer_ffn_batch(
                                              mix_hc,
                                              g->batch_flat_hc,
                                              n_tokens,
-                                             layer->hc_ffn_fn->type) != 0;
+                                             layer->hc_ffn_fn->type, layer->hc_ffn_fn->scale_offset);
     if (metal_graph_use_reference_hc_decode()) {
         if (ok) ok = ds4_gpu_hc_split_sinkhorn_tensor(hc_split_view,
                                                         hc_mix_view,
@@ -19713,7 +19757,7 @@ static bool metal_graph_encode_layer_ffn_batch(
                                              DS4_N_EXPERT,
                                              g->batch_ffn_norm,
                                              n_tokens,
-                                             layer->ffn_gate_inp->type) != 0;
+                                             layer->ffn_gate_inp->type, layer->ffn_gate_inp->scale_offset);
 
     if (ok) ok = ds4_gpu_router_select_batch_tensor(g->batch_router_selected,
                                                       g->batch_router_weights,
@@ -20778,7 +20822,7 @@ static bool metal_graph_eval_mtp_draft_from_hc(
                                               DS4_N_EMBD,
                                               g->mtp_enorm,
                                               1,
-                                              mtp->e_proj->type) != 0;
+                                              mtp->e_proj->type, mtp->e_proj->scale_offset) != 0;
     if (ok) ok = ds4_gpu_repeat_hc_tensor(g->mtp_eproj_hc,
                                             g->mtp_eproj,
                                             DS4_N_EMBD,
@@ -20799,7 +20843,7 @@ static bool metal_graph_eval_mtp_draft_from_hc(
                                               DS4_N_EMBD,
                                               g->mtp_hnorm_hc,
                                               DS4_N_HC,
-                                              mtp->h_proj->type) != 0;
+                                              mtp->h_proj->type, mtp->h_proj->scale_offset) != 0;
     if (ok) ok = ds4_gpu_add_tensor(g->mtp_input_hc,
                                       g->mtp_eproj_hc,
                                       g->mtp_hproj_hc,

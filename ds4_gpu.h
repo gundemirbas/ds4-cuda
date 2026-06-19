@@ -242,7 +242,8 @@ int ds4_gpu_matmul_tensor(
         uint64_t                out_dim,
         const ds4_gpu_tensor *x,
         uint64_t                n_tok,
-        int                     weight_type);
+        int                     weight_type,
+        uint64_t                scale_offset);
 
 /* Optional fused GPU operations.
  *
@@ -287,7 +288,8 @@ int ds4_gpu_shared_gate_up_swiglu_q8_0_tensor(
         uint64_t                out_dim,
         const ds4_gpu_tensor *x,
         float                   clamp,
-        uint32_t                weight_type);
+        uint32_t                weight_type,
+        uint64_t                scale_offset);
 
 int ds4_gpu_matmul_f16_tensor(
         ds4_gpu_tensor       *out,
@@ -1016,7 +1018,8 @@ int ds4_gpu_shared_down_hc_expand_q8_0_tensor(
         const ds4_gpu_tensor *split,
         uint32_t                n_embd,
         uint32_t                n_hc,
-        uint32_t                weight_type);
+        uint32_t                weight_type,
+        uint64_t                scale_offset);
 
 int ds4_gpu_matmul_q8_0_hc_expand_tensor(
         ds4_gpu_tensor       *out_hc,
@@ -1031,7 +1034,8 @@ int ds4_gpu_matmul_q8_0_hc_expand_tensor(
         const ds4_gpu_tensor *split,
         uint32_t                n_embd,
         uint32_t                n_hc,
-        uint32_t                weight_type);
+        uint32_t                weight_type,
+        uint64_t                scale_offset);
 
 /* =========================================================================
  * NVFP4/FP8 Operations (ds4-cuda)
@@ -1046,7 +1050,8 @@ int ds4_gpu_matmul_nvfp4_tensor(
     uint64_t                in_dim,
     uint64_t                out_dim,
     const ds4_gpu_tensor *x,
-    uint64_t                n_tok);
+    uint64_t                n_tok,
+    uint64_t                scale_offset);  /* offset of block scale tensor, 0 if none */
 
 /* FP8 E4M3 GEMV */
 int ds4_gpu_matmul_f8e4m3_tensor(
@@ -1057,7 +1062,8 @@ int ds4_gpu_matmul_f8e4m3_tensor(
     uint64_t                in_dim,
     uint64_t                out_dim,
     const ds4_gpu_tensor *x,
-    uint64_t                n_tok);
+    uint64_t                n_tok,
+    uint64_t                scale_offset);  /* offset of block scale tensor, 0 if none */
 
 /* FP8 attention */
 int ds4_gpu_attention_fp8_heads_tensor(

@@ -9619,14 +9619,15 @@ extern "C" int ds4_gpu_shared_gate_up_swiglu_q8_0_tensor(
         uint64_t                out_dim,
         const ds4_gpu_tensor *x,
         float                   clamp,
-        uint32_t                weight_type) {
+        uint32_t                weight_type,
+        uint64_t                scale_offset) {
     /* Type-aware dispatch */
     if (weight_type == 35 /* DS4_TENSOR_NVFP4 */ || weight_type == 34 /* DS4_TENSOR_F8_E4M3 */) {
         /* For NVFP4/F8: do two separate matmuls */
         int ok = ds4_gpu_matmul_nvfp4_tensor(gate, model_map, model_size,
-                                              gate_offset, in_dim, out_dim, x, 1);
+                                              gate_offset, in_dim, out_dim, x, 1, 0);
         if (ok) ok = ds4_gpu_matmul_nvfp4_tensor(up, model_map, model_size,
-                                                   up_offset, in_dim, out_dim, x, 1);
+                                                   up_offset, in_dim, out_dim, x, 1, 0);
         if (ok) ok = ds4_gpu_swiglu_tensor(mid, gate, up, (uint32_t)out_dim, clamp, 1.0f);
         return ok;
     }
@@ -13361,12 +13362,13 @@ extern "C" int ds4_gpu_shared_down_hc_expand_q8_0_tensor(
         const ds4_gpu_tensor *split,
         uint32_t                n_embd,
         uint32_t                n_hc,
-        uint32_t                weight_type) {
+        uint32_t                weight_type,
+        uint64_t                scale_offset) {
     /* For NVFP4/F8: use separate matmul + hc expand */
     if (weight_type == 35 /* NVFP4 */ || weight_type == 34 /* F8_E4M3 */) {
         int ok = ds4_gpu_matmul_nvfp4_tensor(shared_out, model_map, model_size,
                                               weight_offset, in_dim, out_dim,
-                                              shared_mid, 1);
+                                              shared_mid, 1, 0);
         if (ok) ok = ds4_gpu_hc_expand_add_split_tensor(out_hc, shared_out, routed_out,
                                                          residual_hc, split, n_embd, n_hc);
         return ok;
@@ -13403,11 +13405,12 @@ extern "C" int ds4_gpu_matmul_q8_0_hc_expand_tensor(
         const ds4_gpu_tensor *split,
         uint32_t                n_embd,
         uint32_t                n_hc,
-        uint32_t                weight_type) {
+        uint32_t                weight_type,
+        uint64_t                scale_offset) {
     /* For NVFP4/F8: use separate matmul + hc expand */
     if (weight_type == 35 /* NVFP4 */ || weight_type == 34 /* F8_E4M3 */) {
         int ok = ds4_gpu_matmul_nvfp4_tensor(block_out, model_map, model_size,
-                                              weight_offset, in_dim, out_dim, x, 1);
+                                              weight_offset, in_dim, out_dim, x, 1, 0);
         if (ok) ok = ds4_gpu_hc_expand_add_split_tensor(out_hc, block_out, NULL,
                                                          residual_hc, split, n_embd, n_hc);
         return ok;
@@ -13443,21 +13446,17 @@ extern "C" int ds4_gpu_matmul_tensor(
         uint64_t                out_dim,
         const ds4_gpu_tensor *x,
         uint64_t                n_tok,
-        int                     weight_type) {
-    static int call_count = 0;
-    if (call_count < 5) {
-        fprintf(stderr, "ds4: matmul_tensor type=%d offset=%llu in=%llu out=%llu\n",
-                weight_type, (unsigned long long)weight_offset,
-                (unsigned long long)in_dim, (unsigned long long)out_dim);
-        call_count++;
-    }
+        int                     weight_type,
+        uint64_t                scale_offset) {
     switch (weight_type) {
     case 35: /* DS4_TENSOR_NVFP4 */
         return ds4_gpu_matmul_nvfp4_tensor(out, model_map, model_size,
-                                            weight_offset, in_dim, out_dim, x, n_tok);
+                                            weight_offset, in_dim, out_dim, x, n_tok,
+                                            scale_offset);
     case 34: /* DS4_TENSOR_F8_E4M3 */
         return ds4_gpu_matmul_f8e4m3_tensor(out, model_map, model_size,
-                                             weight_offset, in_dim, out_dim, x, n_tok);
+                                             weight_offset, in_dim, out_dim, x, n_tok,
+                                             scale_offset);
     case 33: /* DS4_TENSOR_BF16 — same 2-byte layout as F16 */
     case 1:  /* DS4_TENSOR_F16 */
         return ds4_gpu_matmul_f16_tensor(out, model_map, model_size,
@@ -13532,19 +13531,33 @@ int ds4_gpu_matmul_nvfp4_tensor(
     uint64_t                in_dim,
     uint64_t                out_dim,
     const ds4_gpu_tensor *x,
-    uint64_t                n_tok) {
+    uint64_t                n_tok,
+    uint64_t                scale_offset) {
     (void)n_tok;
-    /* NVFP4 weight layout: [out_dim][in_dim/2 bytes weights | in_dim/16 bytes scales]
-     * Total row stride = in_dim/2 + in_dim/16 bytes */
-    uint64_t row_bytes = in_dim / 2 + in_dim / 16;
-    uint64_t weight_bytes = out_dim * row_bytes;
+    /* NVFP4 weight layout in safetensors:
+     *   weight: U8, shape=[out_dim, in_dim/2] — packed 4-bit weights
+     *   scale: F8_E4M3, shape=[out_dim, in_dim/16] — block scales (separate tensor)
+     * Kernel expects: w (packed weights), ws (scales)
+     */
+    uint64_t weight_bytes = out_dim * (in_dim / 2);
     const char *w = cuda_model_range_ptr(model_map, weight_offset, weight_bytes, "nvfp4");
     if (!w) return 0;
+    
+    const uint8_t *ws = NULL;
+    if (scale_offset != 0) {
+        uint64_t scale_bytes = out_dim * (in_dim / 16);
+        ws = (const uint8_t *)cuda_model_range_ptr(model_map, scale_offset, scale_bytes, "nvfp4_scale");
+    }
+    if (!ws) {
+        /* Fallback: no scale tensor, use unit scales */
+        fprintf(stderr, "ds4: NVFP4 GEMV: no scale tensor at offset %llu\n",
+                (unsigned long long)scale_offset);
+        return 0;
+    }
+    
     /* Clear stale errors before launch */
     (void)cudaGetLastError();
-    /* Kernel expects: w (packed weights), ws (scales at offset in_dim/2 per row) */
-    launch_gemv_nvfp4((const float*)x->ptr, (const uint8_t*)w,
-                      (const uint8_t*)(w + in_dim / 2), /* scales follow weights per row */
+    launch_gemv_nvfp4((const float*)x->ptr, (const uint8_t*)w, ws,
                       (float*)out->ptr, (int)out_dim, (int)in_dim, 0.0f);
     cudaError_t err = cudaGetLastError();
     if (err != cudaSuccess) {
@@ -13563,26 +13576,23 @@ int ds4_gpu_matmul_f8e4m3_tensor(
     uint64_t                in_dim,
     uint64_t                out_dim,
     const ds4_gpu_tensor *x,
-    uint64_t                n_tok) {
+    uint64_t                n_tok,
+    uint64_t                scale_offset) {
     (void)n_tok;
     /* FP8 E4M3: weight layout is [out_dim][in_dim bytes] */
     uint64_t weight_bytes = out_dim * in_dim;
     const char *w = cuda_model_range_ptr(model_map, weight_offset, weight_bytes, "f8_e4m3");
-    if (!w) {
-        fprintf(stderr, "ds4: F8 E4M3 GEMV: wptr NULL at offset=%llu size=%llu\n",
-                (unsigned long long)weight_offset, (unsigned long long)weight_bytes);
-        return 0;
+    if (!w) return 0;
+    
+    const uint8_t *ws = NULL;
+    if (scale_offset != 0) {
+        /* F8_E8M0 block scales: shape depends on block size
+         * For attention: typically [out_dim/128, in_dim/128] or similar
+         * We pass the scale pointer and let the kernel handle it */
+        /* For now, use the simple GEMV without scales (unit scale)
+         * TODO: implement proper block-scaled GEMV */
     }
-    fprintf(stderr, "ds4: F8 E4M3 GEMV: wptr=%p offset=%llu size=%llu\n",
-            (void*)w, (unsigned long long)weight_offset, (unsigned long long)weight_bytes);
-    /* Check if pointer is device-accessible */
-    cudaPointerAttributes attr;
-    cudaError_t pat = cudaPointerGetAttributes(&attr, w);
-    if (pat != cudaSuccess) {
-        fprintf(stderr, "ds4: F8 E4M3 GEMV: pointer not accessible: %s\n", cudaGetErrorString(pat));
-        return 0;
-    }
-    fprintf(stderr, "ds4: F8 E4M3 GEMV: pointer type=%d device=%d\n", attr.type, attr.device);
+    
     /* Clear stale errors before launch */
     (void)cudaGetLastError();
     launch_gemv_f8e4m3((const float*)x->ptr, (const uint8_t*)w,

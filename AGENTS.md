@@ -57,6 +57,51 @@ EKLENEN YENİ ÖZELLİKLER:
 | **FP8 KV cache (GPU)** | ✅ Tamamlandı | `fp32_to_fp8_e4m3_kernel` + `ds4_fp8_kv_cache_append_gpu` + `ds4_gpu_kv_fp8_quantize_append_tensor` |
 | **End-to-end test** | ⏳ Bekliyor | Model yükleme + inference |
 
+### ⚠️ Tespit Edilen Sorunlar (Debug Sonucu)
+
+| # | Sorun | Durum | Önem |
+|---|-------|-------|------|
+| 1 | **Q8_0 hardcoded dispatch** — Safetensors modelde tüm matmul çağrıları Q8_0 formatı varsayıyordu | ✅ Çözüldü | Kritik |
+| 2 | **F8/NVFP4 weight pointer** — `model_map + offset` yerine `cuda_model_range_ptr` kullanılmıyordu | ✅ Çözüldü | Kritik |
+| 3 | **E4M3 decode hatası** — `d_f8e4m3` E3M4 formatında kodlanmıştı (3-bit exp, 4-bit mantissa) | ✅ Çözüldü | Kritik |
+| 4 | **F8_E4M3 block scales eksik** — Attention weight'lerinde F8_E8M0 block_scale tensor'leri var ama GEMV kernel'ı bunları kullanmıyor | ⏳ Çözülmedi | Yüksek |
+| 5 | **NVFP4 scale tensor ayrılığı** — Safetensors'ta weight ve scale ayrı tensor olarak saklanıyor ama kernel interleave bekliyor | ⏳ Çözülmedi | Kritik |
+
+### Safetensors Weight Formatları (Model Analizi)
+
+```
+Attention weights:
+  layers.X.attn.wq_a.weight:  F8_E4M3, shape=[1024, 4096]
+  layers.X.attn.wq_a.scale:   F8_E8M0, shape=[8, 32]     ← AYRI tensor!
+  layers.X.attn.wq_b.weight:  F8_E4M3, shape=[32768, 1024]
+  layers.X.attn.wq_b.scale:   F8_E8M0, shape=[32, 64]     ← AYRI tensor!
+  layers.X.attn.wkv.weight:   F8_E4M3, shape=[512, 4096]
+  layers.X.attn.wkv.scale:    F8_E8M0, shape=[4, 32]      ← AYRI tensor!
+  layers.X.attn.wo_a.weight:  F8_E4M3, shape=[8192, 4096]
+  layers.X.attn.wo_a.scale:   F8_E8M0, shape=[64, 32]     ← AYRI tensor!
+  layers.X.attn.wo_b.weight:  F8_E4M3, shape=[4096, 8192]
+  layers.X.attn.wo_b.scale:   F8_E8M0, shape=[32, 64]     ← AYRI tensor!
+
+Expert weights:
+  layers.X.ffn.experts.Y.w1.weight:       U8, shape=[2048, 2048]        ← NVFP4 packed
+  layers.X.ffn.experts.Y.w1.weight_scale: F8_E4M3, shape=[2048, 256]    ← AYRI tensor!
+  layers.X.ffn.experts.Y.w1.weight_scale_2: F32, shape=[]               ← Global scale
+  layers.X.ffn.experts.Y.w1.input_scale:  F32, shape=[]                  ← Input scale
+```
+
+### Çözüm Gereksinimleri
+
+**F8_E4M3 block scale desteği:**
+- GEMV kernel'ına `scale_offset` parametresi ekle
+- F8_E8M0 decode fonksiyonu yaz (8-bit exponent-only format)
+- Weight + scale birlikte okunmalı: `output = sum(w[i] * scale[block] * x[i])`
+
+**NVFP4 separate scale desteği:**
+- `ds4_tensor` yapısına `scale_offset` field'ı ekle
+- Safetensors loader'da scale tensor offset'ini bul
+- GEMV wrapper'ına scale pointer'ı geçir
+- Kernel'de `ws` pointer'ı ayrı tensor'dan okunmalı
+
 ---
 
 ## 3. antirez/ds4 Orijinal Yapısı
