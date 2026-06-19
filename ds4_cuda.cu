@@ -13444,6 +13444,13 @@ extern "C" int ds4_gpu_matmul_tensor(
         const ds4_gpu_tensor *x,
         uint64_t                n_tok,
         int                     weight_type) {
+    static int call_count = 0;
+    if (call_count < 5) {
+        fprintf(stderr, "ds4: matmul_tensor type=%d offset=%llu in=%llu out=%llu\n",
+                weight_type, (unsigned long long)weight_offset,
+                (unsigned long long)in_dim, (unsigned long long)out_dim);
+        call_count++;
+    }
     switch (weight_type) {
     case 35: /* DS4_TENSOR_NVFP4 */
         return ds4_gpu_matmul_nvfp4_tensor(out, model_map, model_size,
