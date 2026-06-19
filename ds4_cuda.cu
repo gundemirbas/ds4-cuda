@@ -13502,6 +13502,9 @@ extern "C" int ds4_gpu_matmul_tensor(
 extern "C" void launch_gemv_nvfp4(const float *x, const uint8_t *w, const uint8_t *ws,
                              float *y, int M, int K, float ws2);
 extern "C" void launch_gemv_f8e4m3(const float *x, const uint8_t *w, float *y, int M, int K);
+extern "C" void launch_gemv_f8e4m3_scaled(const float *x, const uint8_t *w, float *y,
+                                int M, int K, const uint8_t *ws,
+                                int block_r, int block_c);
 extern "C" void launch_rms_norm(const float *x, float *out, const float *weight,
                            int rows, int n, float eps);
 extern "C" void launch_rope(float *q, float *k, int n_heads, int head_dim,
@@ -13583,19 +13586,28 @@ int ds4_gpu_matmul_f8e4m3_tensor(
     const char *w = cuda_model_range_ptr(model_map, weight_offset, weight_bytes, "f8_e4m3");
     if (!w) return 0;
     
-    const uint8_t *ws = NULL;
-    if (scale_offset != 0) {
-        /* F8_E8M0 block scales: shape depends on block size
-         * For attention: typically [out_dim/128, in_dim/128] or similar
-         * We pass the scale pointer and let the kernel handle it */
-        /* For now, use the simple GEMV without scales (unit scale)
-         * TODO: implement proper block-scaled GEMV */
-    }
-    
     /* Clear stale errors before launch */
     (void)cudaGetLastError();
-    launch_gemv_f8e4m3((const float*)x->ptr, (const uint8_t*)w,
-                       (float*)out->ptr, (int)out_dim, (int)in_dim);
+    
+    if (scale_offset != 0) {
+        /* Block-scaled F8 E4M3 GEMV */
+        uint64_t scale_bytes = (out_dim / 128) * (in_dim / 128);
+        const uint8_t *ws = (const uint8_t *)cuda_model_range_ptr(model_map, scale_offset, scale_bytes, "f8_e8m0_scale");
+        if (ws) {
+            launch_gemv_f8e4m3_scaled((const float*)x->ptr, (const uint8_t*)w,
+                                       (float*)out->ptr, (int)out_dim, (int)in_dim,
+                                       ws, 128, 128);
+        } else {
+            /* Fallback: no scale, use unscaled */
+            launch_gemv_f8e4m3((const float*)x->ptr, (const uint8_t*)w,
+                               (float*)out->ptr, (int)out_dim, (int)in_dim);
+        }
+    } else {
+        /* Unscaled F8 E4M3 GEMV */
+        launch_gemv_f8e4m3((const float*)x->ptr, (const uint8_t*)w,
+                           (float*)out->ptr, (int)out_dim, (int)in_dim);
+    }
+    
     cudaError_t err = cudaGetLastError();
     if (err != cudaSuccess) {
         fprintf(stderr, "ds4: F8 E4M3 GEMV launch error: %s\n", cudaGetErrorString(err));
@@ -14005,6 +14017,43 @@ __global__ void gemv_f8e4m3_kernel(const float *x, const uint8_t *w,
 extern "C"
 void launch_gemv_f8e4m3(const float *x, const uint8_t *w, float *y, int M, int K) {
     gemv_f8e4m3_kernel<<<(M+255)/256, 256>>>(x, w, y, M, K);
+}
+
+/* ========================================================================
+ * 2c. GEMV F8_E4M3 with F8_E8M0 block scales
+ *     Scale layout: [M/block_r][K/block_c] where each scale covers a block.
+ *     F8_E8M0: 8-bit exponent, no mantissa, no sign. value = 2^(e-127)
+ *     Block size: typically 128x128 for attention weights.
+ * ======================================================================== */
+__device__ __forceinline__ float d_f8e8m0(uint8_t v) {
+    /* F8_E8M0: all 8 bits are exponent, bias=127 */
+    if (v == 0) return ldexpf(1.0f, -127);  /* subnormal: 2^(-127) */
+    if (v == 255) return NAN;  /* NaN */
+    return ldexpf(1.0f, (int)v - 127);
+}
+
+__global__ void gemv_f8e4m3_scaled_kernel(const float *x, const uint8_t *w,
+                                            float *y, int M, int K,
+                                            const uint8_t *ws,
+                                            int block_r, int block_c) {
+    int row = blockIdx.x * blockDim.x + threadIdx.x;
+    if (row >= M) return;
+    float sum = 0.0f;
+    int scale_cols = (K + block_c - 1) / block_c;
+    int scale_row = row / block_r;
+    for (int i = 0; i < K; i++) {
+        int scale_col = i / block_c;
+        float sc = d_f8e8m0(ws[scale_row * scale_cols + scale_col]);
+        sum += d_f8e4m3(w[row * K + i]) * sc * x[i];
+    }
+    y[row] = sum;
+}
+
+extern "C"
+void launch_gemv_f8e4m3_scaled(const float *x, const uint8_t *w, float *y,
+                                int M, int K, const uint8_t *ws,
+                                int block_r, int block_c) {
+    gemv_f8e4m3_scaled_kernel<<<(M+255)/256, 256>>>(x, w, y, M, K, ws, block_r, block_c);
 }
 
 /* ========================================================================
