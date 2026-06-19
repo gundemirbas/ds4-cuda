@@ -2253,6 +2253,7 @@ static bool model_open_safetensors(ds4_model *m, const char *model_dir,
     /* Second pass: find scale tensors for NVFP4/F8 weights.
      * Scale tensors may come AFTER weight tensors in safetensors files,
      * so the first pass couldn't find them. */
+    int scale_found = 0, scale_missing = 0;
     for (uint64_t i = 0; i < (uint64_t)ti; i++) {
         ds4_tensor *t = &m->tensors[i];
         if (t->scale_offset != 0) continue;  /* already found */
@@ -2273,6 +2274,7 @@ static bool model_open_safetensors(ds4_model *m, const char *model_dir,
             ds4_tensor *st2 = &m->tensors[j];
             if (st2->name.ptr && strcmp(st2->name.ptr, scale_name) == 0) {
                 t->scale_offset = st2->abs_offset;
+                scale_found++;
                 break;
             }
         }
@@ -2284,11 +2286,14 @@ static bool model_open_safetensors(ds4_model *m, const char *model_dir,
                 ds4_tensor *st2 = &m->tensors[j];
                 if (st2->name.ptr && strcmp(st2->name.ptr, scale_name) == 0) {
                     t->scale_offset = st2->abs_offset;
+                    scale_found++;
                     break;
                 }
             }
         }
+        if (t->scale_offset == 0) scale_missing++;
     }
+    fprintf(stderr, "ds4: scale tensor lookup: %d found, %d missing\n", scale_found, scale_missing);
     
     /* Store shard info for multi-shard data access */
     m->shard_count = sst->n_models;
