@@ -13533,10 +13533,17 @@ int ds4_gpu_matmul_nvfp4_tensor(
     uint64_t weight_bytes = out_dim * row_bytes;
     const char *w = cuda_model_range_ptr(model_map, weight_offset, weight_bytes, "nvfp4");
     if (!w) return 0;
+    /* Clear stale errors before launch */
+    (void)cudaGetLastError();
     /* Kernel expects: w (packed weights), ws (scales at offset in_dim/2 per row) */
     launch_gemv_nvfp4((const float*)x->ptr, (const uint8_t*)w,
                       (const uint8_t*)(w + in_dim / 2), /* scales follow weights per row */
                       (float*)out->ptr, (int)out_dim, (int)in_dim, 0.0f);
+    cudaError_t err = cudaGetLastError();
+    if (err != cudaSuccess) {
+        fprintf(stderr, "ds4: NVFP4 GEMV launch error: %s\n", cudaGetErrorString(err));
+        return 0;
+    }
     return 1;
 }
 
@@ -13555,8 +13562,15 @@ int ds4_gpu_matmul_f8e4m3_tensor(
     uint64_t weight_bytes = out_dim * in_dim;
     const char *w = cuda_model_range_ptr(model_map, weight_offset, weight_bytes, "f8_e4m3");
     if (!w) return 0;
+    /* Clear stale errors before launch */
+    (void)cudaGetLastError();
     launch_gemv_f8e4m3((const float*)x->ptr, (const uint8_t*)w,
                        (float*)out->ptr, (int)out_dim, (int)in_dim);
+    cudaError_t err = cudaGetLastError();
+    if (err != cudaSuccess) {
+        fprintf(stderr, "ds4: F8 E4M3 GEMV launch error: %s\n", cudaGetErrorString(err));
+        return 0;
+    }
     return 1;
 }
 
