@@ -13573,6 +13573,8 @@ int ds4_gpu_matmul_f8e4m3_tensor(
                 (unsigned long long)weight_offset, (unsigned long long)weight_bytes);
         return 0;
     }
+    fprintf(stderr, "ds4: F8 E4M3 GEMV: wptr=%p offset=%llu size=%llu\n",
+            (void*)w, (unsigned long long)weight_offset, (unsigned long long)weight_bytes);
     /* Check if pointer is device-accessible */
     cudaPointerAttributes attr;
     cudaError_t pat = cudaPointerGetAttributes(&attr, w);
@@ -13580,6 +13582,7 @@ int ds4_gpu_matmul_f8e4m3_tensor(
         fprintf(stderr, "ds4: F8 E4M3 GEMV: pointer not accessible: %s\n", cudaGetErrorString(pat));
         return 0;
     }
+    fprintf(stderr, "ds4: F8 E4M3 GEMV: pointer type=%d device=%d\n", attr.type, attr.device);
     /* Clear stale errors before launch */
     (void)cudaGetLastError();
     launch_gemv_f8e4m3((const float*)x->ptr, (const uint8_t*)w,
