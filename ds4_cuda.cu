@@ -382,21 +382,25 @@ static const char *cuda_model_range_populate_device_copy(const void *model_map,
 
     const char *src = (const char *)model_map + offset;
     const uint64_t chunk = 256ull * 1024ull * 1024ull;
-    /* Persistent staging buffer for tmp-buf fallback (64 MiB) */
+    /* Persistent staging buffer for tmp-buf fallback (64 MiB managed) */
     void *stage = NULL;
     const uint64_t stage_size = 64ull * 1024ull * 1024ull;
     for (uint64_t done = 0; done < bytes; done += chunk) {
         uint64_t n = bytes - done < chunk ? bytes - done : chunk;
-        /* Try cudaMemcpyDefault first (UVA path), fall back to temporary CPU buffer */
+        /* Try cudaMemcpyDefault first (UVA path), fall back to staging buffer */
         err = cudaMemcpy((char *)dev + done, src + done, (size_t)n, cudaMemcpyDefault);
         if (err != cudaSuccess) {
             /* Clear stale error before fallback */
             (void)cudaGetLastError();
-            /* Fallback: copy through a persistent staging buffer */
+            /* Fallback: copy through a managed staging buffer.
+             * On GB10, cudaMemcpyHostToDevice from malloc'd memory may fail,
+             * so use cudaMallocManaged which is accessible by both CPU and GPU. */
             if (!stage) {
-                stage = malloc(stage_size);
-                if (!stage) {
-                    fprintf(stderr, "ds4: CUDA model range stage alloc failed\n");
+                err = cudaMallocManaged(&stage, stage_size);
+                if (err != cudaSuccess) {
+                    fprintf(stderr, "ds4: CUDA model range stage alloc failed: %s\n",
+                            cudaGetErrorString(err));
+                    (void)cudaGetLastError();
                     (void)cudaFree(dev);
                     return NULL;
                 }
@@ -406,7 +410,7 @@ static const char *cuda_model_range_populate_device_copy(const void *model_map,
             while (remain > 0) {
                 uint64_t sub = remain < stage_size ? remain : stage_size;
                 memcpy((char *)stage, src + done + sub_done, sub);
-                err = cudaMemcpy((char *)dev + done + sub_done, stage, sub, cudaMemcpyHostToDevice);
+                err = cudaMemcpy((char *)dev + done + sub_done, stage, sub, cudaMemcpyDefault);
                 if (err != cudaSuccess) {
                     fprintf(stderr, "ds4: CUDA model range copy failed for %s at %.2f/%.2f MiB: %s\n",
                             what ? what : "weights",
@@ -415,7 +419,7 @@ static const char *cuda_model_range_populate_device_copy(const void *model_map,
                             cudaGetErrorString(err));
                     (void)cudaGetLastError();
                     (void)cudaFree(dev);
-                    if (stage) free(stage);
+                    if (stage) cudaFree(stage);
                     return NULL;
                 }
                 sub_done += sub;
@@ -423,7 +427,7 @@ static const char *cuda_model_range_populate_device_copy(const void *model_map,
             }
         }
     }
-    if (stage) free(stage);
+    if (stage) cudaFree(stage);
     g_model_ranges.push_back({model_map, offset, bytes, (char *)dev, NULL, NULL, 0, 0, 0});
     g_model_range_by_offset[offset] = g_model_ranges.size() - 1u;
     g_model_range_bytes += bytes;
@@ -13550,7 +13554,24 @@ int ds4_gpu_attention_fp8_heads_tensor(
     return 1;
 }
 
-/* FP8 KV cache quantize + append wrapper */
+/* ========================================================================
+ * FP32 -> FP8 E4M3 conversion kernel (forward declaration)
+ * ======================================================================== */
+__global__ void fp32_to_fp8_e4m3_kernel(
+    const float *__restrict__ src,
+    uint8_t     *__restrict__ dst,
+    int n);
+
+/* FP8 KV cache quantize + append wrapper
+ *
+ * Takes FP32 K/V from `kv` tensor and quantizes to FP8 E4M3,
+ * writing into `raw_cache` at the given `row` position.
+ *
+ * raw_cache layout: [raw_cap][head_dim * 2] FP32 — but we write FP8.
+ * Actually this function writes FP8 into the raw cache buffer directly.
+ *
+ * kv layout: K followed by V, each head_dim floats.
+ */
 int ds4_gpu_kv_fp8_quantize_append_tensor(
     ds4_gpu_tensor       *kv,
     ds4_gpu_tensor       *raw_cache,
@@ -13558,14 +13579,25 @@ int ds4_gpu_kv_fp8_quantize_append_tensor(
     uint32_t                row,
     uint32_t                head_dim,
     uint32_t                n_rot) {
-    /* TODO: Implement FP8 KV cache append on GPU */
-    (void)kv;
-    (void)raw_cache;
-    (void)raw_cap;
-    (void)row;
-    (void)head_dim;
-    (void)n_rot;
-    return 1;
+    if (!kv || !raw_cache || !kv->ptr || !raw_cache->ptr) return 1;
+    if (row >= raw_cap) return 1;
+
+    /* KV tensor: K is first head_dim floats, V is next head_dim floats */
+    const float *d_k = (const float *)kv->ptr;
+    const float *d_v = d_k + head_dim;
+
+    /* Write FP8 K into raw_cache[row][0..head_dim-1] */
+    uint8_t *dst_k = (uint8_t *)raw_cache->ptr + (uint64_t)row * head_dim;
+    int count = (int)head_dim;
+    int threads = 256;
+    int blocks = (count + threads - 1) / threads;
+    fp32_to_fp8_e4m3_kernel<<<blocks, threads>>>(d_k, dst_k, count);
+
+    /* Write FP8 V into raw_cache[row][head_dim..2*head_dim-1] */
+    uint8_t *dst_v = dst_k + head_dim;
+    fp32_to_fp8_e4m3_kernel<<<blocks, threads>>>(d_v, dst_v, count);
+
+    return 0;
 }
 
 
@@ -13609,13 +13641,85 @@ extern "C" void ds4_fp8_kv_cache_reset_gpu(ds4_fp8_kv_cache *cache) {
     cudaMemset(cache->d_v_cache, 0, total);
 }
 
+/* ========================================================================
+ * FP32 -> FP8 E4M3 conversion kernel
+ * E4M3: 1 sign bit, 4 exponent bits (bias=7), 3 mantissa bits
+ * ======================================================================== */
+__global__ void fp32_to_fp8_e4m3_kernel(
+    const float *__restrict__ src,   /* [n] FP32 input */
+    uint8_t     *__restrict__ dst,   /* [n] FP8 E4M3 output */
+    int n)
+{
+    int i = blockIdx.x * blockDim.x + threadIdx.x;
+    if (i >= n) return;
+
+    float val = src[i];
+    unsigned int bits = __float_as_uint(val);
+    unsigned int sign = (bits >> 31) & 1;
+    unsigned int abs_bits = bits & 0x7FFFFFFF;
+
+    /* Handle zero and subnormals */
+    if (abs_bits == 0) {
+        dst[i] = 0;
+        return;
+    }
+
+    /* Extract exponent and mantissa from FP32 */
+    int fp32_exp = (int)((abs_bits >> 23) & 0xFF) - 127;
+    unsigned int fp32_mant = abs_bits & 0x7FFFFF;
+
+    /* FP8 E4M3: max exponent = 8 (bias 7, so exp range -7..8) */
+    /* FP8 E4M3: exponent 0xFF is NaN, not Inf */
+    /* Max representable: 448.0 (exp=8, mantissa=111b = 7/8) */
+
+    int fp8_exp;
+    unsigned int fp8_mant;
+
+    if (fp32_exp > 8) {
+        /* Overflow -> clamp to max FP8 E4M3 = 448.0
+         * exponent=15 (0xF), mantissa=010b (0xFA) */
+        fp8_exp = 15;
+        fp8_mant = 2; /* 0b010 */
+    } else if (fp32_exp < -6) {
+        /* Too small for even FP8 subnormal (min subnormal ~2^-9)
+         * Use FTZ: flush to zero */
+        dst[i] = 0;
+        return;
+    } else if (fp32_exp == -7) {
+        /* FP8 subnormal */
+        fp8_exp = 0;
+        /* FP32 mantissa with implicit 1 removed, shift right */
+        unsigned int full_mant = (1u << 23) | fp32_mant;
+        int shift = -6 - fp32_exp; /* shift = 1 for exp=-7 */
+        fp8_mant = (full_mant >> (23 - 3 + shift)) & 0x7;
+    } else {
+        /* Normal number */
+        fp8_exp = (unsigned int)(fp32_exp + 7); /* bias = 7 */
+        fp8_mant = (fp32_mant >> 20) & 0x7; /* top 3 bits of mantissa */
+    }
+
+    dst[i] = (uint8_t)((sign << 7) | ((fp8_exp & 0xF) << 3) | (fp8_mant & 0x7));
+}
+
 extern "C" void ds4_fp8_kv_cache_append_gpu(
     ds4_fp8_kv_cache *cache, unsigned int layer, unsigned int pos,
     const float *d_k, const float *d_v)
 {
-    (void)d_k; (void)d_v;
     if (!cache || layer >= cache->n_layers || pos >= cache->n_ctx) return;
-    /* TODO: implement FP32->FP8 conversion + append */
+
+    unsigned int row_bytes = cache->n_kv_heads * cache->head_dim;
+    unsigned long long layer_off = (unsigned long long)layer * cache->n_ctx * row_bytes;
+
+    /* K cache: write FP8 K data at [layer][pos] */
+    uint8_t *d_k_dst = (uint8_t *)cache->d_k_cache + layer_off + (unsigned long long)pos * row_bytes;
+    int k_count = (int)row_bytes;
+    int threads = 256;
+    int blocks = (k_count + threads - 1) / threads;
+    fp32_to_fp8_e4m3_kernel<<<blocks, threads>>>(d_k, d_k_dst, k_count);
+
+    /* V cache: write FP8 V data at [layer][pos] */
+    uint8_t *d_v_dst = (uint8_t *)cache->d_v_cache + layer_off + (unsigned long long)pos * row_bytes;
+    fp32_to_fp8_e4m3_kernel<<<blocks, threads>>>(d_v, d_v_dst, k_count);
 }
 
 extern "C" void ds4_fp8_kv_cache_get_ptrs_gpu(

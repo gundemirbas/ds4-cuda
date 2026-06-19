@@ -40,7 +40,7 @@ EKLENEN YENİ ÖZELLİKLER:
 |-------|-------|----------|
 | Safetensors parser | ✅ Tamamlandı | `ds4.c` içine merge edildi (eski: `ds4_safetensors.c` 434 satır) |
 | FP8 KV cache CPU | ✅ Tamamlandı | `ds4.c` içine merge edildi (eski: `ds4_kv_cache.c` 104 satır) |
-| FP8 KV cache GPU | ✅ Tamamlandı | `ds4_cuda.cu` içine merge edildi (eski: `ds4_kv_cache.cu` 124 satır) |
+| FP8 KV cache GPU | ✅ Tamamlandı | `ds4_cuda.cu` içine merge edildi + `fp32_to_fp8_e4m3_kernel` implemente edildi |
 | config.json parser | ✅ Tamamlandı | `ds4.c` içine merge edildi (eski: `ds4_model_config.c` 270 satır) |
 | Expert LRU cache | ✅ Tamamlandı | `ds4.c` içine merge edildi (eski: `ds4_expert_cache.c` 188 satır) |
 | NVFP4 MMQ kernel | ✅ Tamamlandı | `ds4_cuda.cu` içine merge edildi (eski: `ds4_cuda_nvfp4_mmq.cu` 106 satır) |
@@ -54,6 +54,7 @@ EKLENEN YENİ ÖZELLİKLER:
 | **SSD streaming (safetensors)** | ✅ Tamamlandı | PROT_READ + cudaHostRegister fallback + hmm_direct |
 | **FP8 KV cache (auto)** | ✅ Tamamlandı | Safetensors algılayınca otomatik etkin |
 | **Distributed (safetensors)** | ✅ Tamamlandı | Aynı SSD streaming mekanizması |
+| **FP8 KV cache (GPU)** | ✅ Tamamlandı | `fp32_to_fp8_e4m3_kernel` + `ds4_fp8_kv_cache_append_gpu` + `ds4_gpu_kv_fp8_quantize_append_tensor` |
 | **End-to-end test** | ⏳ Bekliyor | Model yükleme + inference |
 
 ---
