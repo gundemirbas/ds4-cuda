@@ -13527,8 +13527,15 @@ int ds4_gpu_matmul_nvfp4_tensor(
     const ds4_gpu_tensor *x,
     uint64_t                n_tok) {
     (void)n_tok;
-    const void *w = (const char*)model_map + weight_offset;
-    launch_gemv_nvfp4((const float*)x->ptr, (const uint8_t*)w, NULL,
+    /* NVFP4 weight layout: [out_dim][in_dim/2 bytes weights | in_dim/16 bytes scales]
+     * Total row stride = in_dim/2 + in_dim/16 bytes */
+    uint64_t row_bytes = in_dim / 2 + in_dim / 16;
+    uint64_t weight_bytes = out_dim * row_bytes;
+    const char *w = cuda_model_range_ptr(model_map, weight_offset, weight_bytes, "nvfp4");
+    if (!w) return 0;
+    /* Kernel expects: w (packed weights), ws (scales at offset in_dim/2 per row) */
+    launch_gemv_nvfp4((const float*)x->ptr, (const uint8_t*)w,
+                      (const uint8_t*)(w + in_dim / 2), /* scales follow weights per row */
                       (float*)out->ptr, (int)out_dim, (int)in_dim, 0.0f);
     return 1;
 }
@@ -13544,7 +13551,10 @@ int ds4_gpu_matmul_f8e4m3_tensor(
     const ds4_gpu_tensor *x,
     uint64_t                n_tok) {
     (void)n_tok;
-    const void *w = (const char*)model_map + weight_offset;
+    /* FP8 E4M3: weight layout is [out_dim][in_dim bytes] */
+    uint64_t weight_bytes = out_dim * in_dim;
+    const char *w = cuda_model_range_ptr(model_map, weight_offset, weight_bytes, "f8_e4m3");
+    if (!w) return 0;
     launch_gemv_f8e4m3((const float*)x->ptr, (const uint8_t*)w,
                        (float*)out->ptr, (int)out_dim, (int)in_dim);
     return 1;
