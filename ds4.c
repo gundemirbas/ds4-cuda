@@ -15803,6 +15803,17 @@ static bool metal_graph_encode_decode_layer(
                                                                    model->map, model->size,
                                                                    layer->attn_norm->abs_offset,
                                                                    DS4_N_EMBD, DS4_RMS_EPS) != 0;
+    /* Debug: check attn_norm output */
+    {
+        static int dbg = 0;
+        if (dbg < 3 && ok) {
+            float h_norm[4];
+            ds4_gpu_tensor_read(g->attn_norm, 0, h_norm, sizeof(h_norm));
+            fprintf(stderr, "ds4: attn_norm output[0..3]=%f %f %f %f\n",
+                    h_norm[0], h_norm[1], h_norm[2], h_norm[3]);
+            dbg++;
+        }
+    }
     DS4_METAL_PROFILE_DECODE_STAGE("attn_norm");
     if (ok) {
         metal_graph_debug_dump_tensor("attn_norm", g->attn_norm, DS4_N_EMBD, il, pos);
