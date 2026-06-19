@@ -9625,9 +9625,9 @@ extern "C" int ds4_gpu_shared_gate_up_swiglu_q8_0_tensor(
     if (weight_type == 35 /* DS4_TENSOR_NVFP4 */ || weight_type == 34 /* DS4_TENSOR_F8_E4M3 */) {
         /* For NVFP4/F8: do two separate matmuls */
         int ok = ds4_gpu_matmul_nvfp4_tensor(gate, model_map, model_size,
-                                              gate_offset, in_dim, out_dim, x, 1, 0);
+                                              gate_offset, in_dim, out_dim, x, 1, scale_offset);
         if (ok) ok = ds4_gpu_matmul_nvfp4_tensor(up, model_map, model_size,
-                                                   up_offset, in_dim, out_dim, x, 1, 0);
+                                                   up_offset, in_dim, out_dim, x, 1, scale_offset);
         if (ok) ok = ds4_gpu_swiglu_tensor(mid, gate, up, (uint32_t)out_dim, clamp, 1.0f);
         return ok;
     }
