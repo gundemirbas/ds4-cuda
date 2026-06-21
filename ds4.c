@@ -15955,6 +15955,7 @@ static bool metal_graph_encode_decode_layer(
                                                 DS4_ROPE_YARN_BETA_FAST, DS4_ROPE_YARN_BETA_SLOW) != 0;
     }
     DS4_METAL_PROFILE_DECODE_STAGE("q_path");
+    if (!ok) fprintf(stderr, "ds4: L%u FAILED at q_path\n", il);
     if (ok) {
         metal_graph_debug_dump_tensor("Qcur", g->q, q_dim, il, pos);
     }
@@ -15989,6 +15990,7 @@ static bool metal_graph_encode_decode_layer(
      * share one pass without changing the trigonometric path. */
     if (ok) ok = metal_graph_decode_kv_store(g->kv, raw_cache, raw_cap, raw_row);
     DS4_METAL_PROFILE_DECODE_STAGE("kv_path");
+    if (!ok) fprintf(stderr, "ds4: L%u FAILED at kv_path\n", il);
     if (ok) {
         metal_graph_debug_dump_tensor("KVcur", g->kv, DS4_N_HEAD_DIM, il, pos);
     }
@@ -16338,6 +16340,7 @@ static bool metal_graph_encode_decode_layer(
         }
     }
     DS4_METAL_PROFILE_DECODE_STAGE("attention");
+    if (!ok) fprintf(stderr, "ds4: L%u FAILED at attention\n", il);
     if (ok) {
         metal_graph_debug_dump_tensor("kqv_out", g->heads, q_dim, il, pos);
     }
@@ -16396,6 +16399,7 @@ static bool metal_graph_encode_decode_layer(
                                                         g->heads, 1) != 0;
     }
     DS4_METAL_PROFILE_DECODE_STAGE("attn_output");
+    if (!ok) fprintf(stderr, "ds4: L%u FAILED at attn_output\n", il);
     if (ok) {
         metal_graph_debug_dump_tensor("attn_low", g->attn_low, (uint64_t)n_groups * rank, il, pos);
     }
@@ -16506,6 +16510,7 @@ static bool metal_graph_encode_decode_layer(
                                                                    g);
     }
     DS4_METAL_PROFILE_DECODE_STAGE("router");
+    if (!ok) fprintf(stderr, "ds4: L%u FAILED at router\n", il);
     if (ok) ok = metal_graph_profile_router_selection(g, layer, il, pos);
     if (ok) {
         metal_graph_debug_dump_tensor("ffn_moe_logits", g->router_logits, DS4_N_EXPERT, il, pos);
