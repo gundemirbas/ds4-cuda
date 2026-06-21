@@ -375,7 +375,9 @@ int ds4_gpu_dsv4_qkv_rms_norm_rows_tensor(
         uint64_t                kv_weight_offset,
         uint32_t                kv_n,
         uint32_t                rows,
-        float                   eps);
+        float                   eps,
+        int                     q_is_bf16,
+        int                     kv_is_bf16);
 
 int ds4_gpu_head_rms_norm_tensor(
         ds4_gpu_tensor *x,

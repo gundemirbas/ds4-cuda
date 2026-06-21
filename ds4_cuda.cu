@@ -8318,7 +8318,9 @@ extern "C" int ds4_gpu_dsv4_qkv_rms_norm_rows_tensor(
         uint64_t                kv_weight_offset,
         uint32_t                kv_n,
         uint32_t                rows,
-        float                   eps) {
+        float                   eps,
+        int                     q_is_bf16,
+        int                     kv_is_bf16) {
     if (getenv("DS4_CUDA_DISABLE_QKV_RMS_FUSED") == NULL) {
         if (!q_out || !q || !kv_out || !kv || !model_map ||
             q_weight_offset > model_size ||
@@ -8331,11 +8333,11 @@ extern "C" int ds4_gpu_dsv4_qkv_rms_norm_rows_tensor(
             kv->bytes < (uint64_t)kv_n * rows * sizeof(float)) {
             return 0;
         }
-        const float *q_w = (const float *)((const char *)model_map + q_weight_offset);
-        const float *kv_w = (const float *)((const char *)model_map + kv_weight_offset);
-        if (!q_w || !kv_w) return 0;
+        const char *q_w_src = (const char *)model_map + q_weight_offset;
+        const char *kv_w_src = (const char *)model_map + kv_weight_offset;
+        if (!q_w_src || !kv_w_src) return 0;
         /* Copy small RMS norm weights to GPU — UVA pointers from mmap may not
-         * be accessible from all kernel address spaces. */
+         * be accessible from all kernel address spaces. Handle BF16 conversion. */
         float *d_q_w = NULL, *d_kv_w = NULL;
         const size_t q_w_bytes = (size_t)q_n * sizeof(float);
         const size_t kv_w_bytes = (size_t)kv_n * sizeof(float);
@@ -8347,8 +8349,19 @@ extern "C" int ds4_gpu_dsv4_qkv_rms_norm_rows_tensor(
         float *tmp_q = (float *)malloc(q_w_bytes);
         float *tmp_kv = (float *)malloc(kv_w_bytes);
         if (!tmp_q || !tmp_kv) { free(tmp_q); free(tmp_kv); cudaFree(d_q_w); cudaFree(d_kv_w); return 0; }
-        memcpy(tmp_q, q_w, q_w_bytes);
-        memcpy(tmp_kv, kv_w, kv_w_bytes);
+        /* Detect BF16 and convert */
+        if (q_is_bf16) {
+            const uint16_t *bf16 = (const uint16_t *)q_w_src;
+            for (uint32_t i = 0; i < q_n; i++) tmp_q[i] = cpu_bf16_to_float(bf16[i]);
+        } else {
+            memcpy(tmp_q, q_w_src, q_w_bytes);
+        }
+        if (kv_is_bf16) {
+            const uint16_t *bf16 = (const uint16_t *)kv_w_src;
+            for (uint32_t i = 0; i < kv_n; i++) tmp_kv[i] = cpu_bf16_to_float(bf16[i]);
+        } else {
+            memcpy(tmp_kv, kv_w_src, kv_w_bytes);
+        }
         cudaMemcpy(d_q_w, tmp_q, q_w_bytes, cudaMemcpyHostToDevice);
         cudaMemcpy(d_kv_w, tmp_kv, kv_w_bytes, cudaMemcpyHostToDevice);
         free(tmp_q); free(tmp_kv);

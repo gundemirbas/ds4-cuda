@@ -15898,7 +15898,9 @@ static bool metal_graph_encode_decode_layer(
                                                              layer->attn_kv_a_norm->abs_offset,
                                                              DS4_N_HEAD_DIM,
                                                              1,
-                                                             DS4_RMS_EPS) != 0;
+                                                             DS4_RMS_EPS,
+                                                             layer->attn_q_a_norm->type == DS4_TENSOR_BF16,
+                                                             layer->attn_kv_a_norm->type == DS4_TENSOR_BF16) != 0;
     } else {
         if (ok) ok = ds4_gpu_rms_norm_weight_tensor(g->qr_norm, g->qr,
                                                       model->map, model->size,
@@ -18436,7 +18438,9 @@ static bool metal_graph_encode_layer_attention_batch(
                                                              layer->attn_kv_a_norm->abs_offset,
                                                              DS4_N_HEAD_DIM,
                                                              n_tokens,
-                                                             DS4_RMS_EPS) != 0;
+                                                             DS4_RMS_EPS,
+                                                             layer->attn_q_a_norm->type == DS4_TENSOR_BF16,
+                                                             layer->attn_kv_a_norm->type == DS4_TENSOR_BF16) != 0;
     } else {
         if (ok) ok = ds4_gpu_rms_norm_weight_rows_tensor(g->batch_qr_norm,
                                                            g->batch_qr,
