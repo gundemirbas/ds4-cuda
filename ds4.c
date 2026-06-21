@@ -15817,6 +15817,21 @@ static bool metal_graph_encode_decode_layer(
                                                                    layer->attn_norm->abs_offset,
                                                                    DS4_N_EMBD, DS4_RMS_EPS,
                                                                    layer->attn_norm->type == DS4_TENSOR_BF16) != 0;
+    /* Debug: check actual norm weight data via mmap */
+    {
+        static int dbg = 0;
+        if (dbg < 3) {
+            const char *base = (const char *)model->map;
+            const char *norm_ptr = base + layer->attn_norm->abs_offset;
+            const uint16_t *bf16_vals = (const uint16_t *)norm_ptr;
+            fprintf(stderr, "ds4: norm_weight: abs_offset=%llu model_map=%p norm_ptr=%p bf16[0..3]=%u %u %u %u size=%llu\n",
+                    (unsigned long long)layer->attn_norm->abs_offset,
+                    base, (void*)norm_ptr,
+                    bf16_vals[0], bf16_vals[1], bf16_vals[2], bf16_vals[3],
+                    (unsigned long long)model->size);
+            dbg++;
+        }
+    }
     /* Debug: check attn_norm output */
     {
         static int dbg = 0;
