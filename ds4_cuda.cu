@@ -8042,6 +8042,41 @@ static int cuda_matmul_q8_0_hc_expand_tensor_labeled(
     return cuda_ok(cudaGetLastError(), "matmul_q8_0_hc_expand launch");
 }
 
+/* BF16 GEMV: y[M] = W[M,K] × x[K] where W is BF16 (2-byte, 1s8e7m) */
+__global__ void gemv_bf16_kernel(const float *x, const uint16_t *w, float *y, int M, int K) {
+    int row = blockIdx.x * blockDim.x + threadIdx.x;
+    if (row >= M) return;
+    float sum = 0.0f;
+    for (int i = 0; i < K; i++) {
+        sum += bf16_to_float(w[row * K + i]) * x[i];
+    }
+    y[row] = sum;
+}
+
+extern "C" int ds4_gpu_matmul_bf16_tensor(ds4_gpu_tensor *out, const void *model_map, uint64_t model_size, uint64_t weight_offset, uint64_t in_dim, uint64_t out_dim, const ds4_gpu_tensor *x, uint64_t n_tok) {
+    if (!out || !x || !model_map) return 0;
+    if (weight_offset > model_size || out_dim > UINT64_MAX / in_dim) return 0;
+    uint64_t weight_bytes = out_dim * in_dim * sizeof(uint16_t);
+    if (weight_bytes > model_size - weight_offset) return 0;
+    if (x->bytes < n_tok * in_dim * sizeof(float) ||
+        out->bytes < n_tok * out_dim * sizeof(float)) return 0;
+    const uint16_t *wptr = (const uint16_t *)cuda_model_range_ptr(model_map, weight_offset, weight_bytes, "bf16");
+    if (!wptr) return 0;
+    (void)cudaGetLastError();
+    gemv_bf16_kernel<<<(n_tok * out_dim + 255) / 256, 256>>>((const float *)x->ptr, wptr, (float *)out->ptr, (int)out_dim, (int)in_dim);
+    cudaError_t err = cudaGetLastError();
+    if (err != cudaSuccess) {
+        fprintf(stderr, "ds4: BF16 matmul launch error: %s\n", cudaGetErrorString(err));
+        return 0;
+    }
+    err = cudaDeviceSynchronize();
+    if (err != cudaSuccess) {
+        fprintf(stderr, "ds4: BF16 matmul sync error: %s\n", cudaGetErrorString(err));
+        return 0;
+    }
+    return 1;
+}
+
 extern "C" int ds4_gpu_matmul_f16_tensor(ds4_gpu_tensor *out, const void *model_map, uint64_t model_size, uint64_t weight_offset, uint64_t in_dim, uint64_t out_dim, const ds4_gpu_tensor *x, uint64_t n_tok) {
     if (!out || !x || !model_map) return 0;
     if (weight_offset > model_size || out_dim > UINT64_MAX / in_dim) return 0;
@@ -13663,7 +13698,9 @@ extern "C" int ds4_gpu_matmul_tensor(
         return ds4_gpu_matmul_f8e4m3_tensor(out, model_map, model_size,
                                              weight_offset, in_dim, out_dim, x, n_tok,
                                              scale_offset);
-    case 33: /* DS4_TENSOR_BF16 — same 2-byte layout as F16 */
+    case 33: /* DS4_TENSOR_BF16 */
+        return ds4_gpu_matmul_bf16_tensor(out, model_map, model_size,
+                                          weight_offset, in_dim, out_dim, x, n_tok);
     case 1:  /* DS4_TENSOR_F16 */
         return ds4_gpu_matmul_f16_tensor(out, model_map, model_size,
                                           weight_offset, in_dim, out_dim, x, n_tok);
