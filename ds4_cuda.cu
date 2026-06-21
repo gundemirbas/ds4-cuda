@@ -13327,6 +13327,16 @@ extern "C" int ds4_gpu_hc_split_weighted_sum_norm_tensor(
             cudaMemcpy(d_scale, tmp_s, 3 * sizeof(float), cudaMemcpyHostToDevice);
             cudaMemcpy(d_base, tmp_b, mix_bytes, cudaMemcpyHostToDevice);
             cudaMemcpy(d_norm_w, tmp_n, (uint64_t)n_embd * sizeof(float), cudaMemcpyHostToDevice);
+            {
+                static int dbg = 0;
+                if (dbg < 3) {
+                    fprintf(stderr, "ds4: fused_norm: norm_w_src=%p norm_is_bf16=%d tmp_n[0..3]=%f %f %f %f\n",
+                            (void*)norm_w_src, norm_is_bf16, tmp_n[0], tmp_n[1], tmp_n[2], tmp_n[3]);
+                    fprintf(stderr, "ds4: fused_norm: scale_h[0..3]=%f %f %f %f\n",
+                            scale_h[0], scale_h[1], scale_h[2], scale_h[3]);
+                    dbg++;
+                }
+            }
             free(tmp_s); free(tmp_b); free(tmp_n);
             hc_split_weighted_sum_norm_fused_kernel<<<(uint32_t)n_rows, 256>>>(
                     (float *)out->ptr,
