@@ -9799,6 +9799,13 @@ extern "C" int ds4_gpu_shared_gate_up_swiglu_q8_0_tensor(
         if (ok) ok = ds4_gpu_matmul_nvfp4_tensor(up, model_map, model_size,
                                                    up_offset, in_dim, out_dim, x, 1, up_scale_offset);
         if (ok) ok = ds4_gpu_swiglu_tensor(mid, gate, up, (uint32_t)out_dim, clamp, 1.0f);
+        { /* debug: check gate/up/mid */
+            float buf[4];
+            (void)cudaDeviceSynchronize();
+            if (ds4_gpu_tensor_read(gate, 0, buf, sizeof(buf)))
+                fprintf(stderr, "ds4: NVFP4 gate[0..3]=%g %g %g %g\n",
+                        (double)buf[0], (double)buf[1], (double)buf[2], (double)buf[3]);
+        }
         return ok;
     }
     if (weight_type == 34 /* DS4_TENSOR_F8_E4M3 */) {
@@ -9807,6 +9814,13 @@ extern "C" int ds4_gpu_shared_gate_up_swiglu_q8_0_tensor(
         if (ok) ok = ds4_gpu_matmul_f8e4m3_tensor(up, model_map, model_size,
                                                     up_offset, in_dim, out_dim, x, 1, up_scale_offset);
         if (ok) ok = ds4_gpu_swiglu_tensor(mid, gate, up, (uint32_t)out_dim, clamp, 1.0f);
+        { /* debug: check gate/up/mid */
+            float buf[4];
+            (void)cudaDeviceSynchronize();
+            if (ds4_gpu_tensor_read(gate, 0, buf, sizeof(buf)))
+                fprintf(stderr, "ds4: F8 gate[0..3]=%g %g %g %g\n",
+                        (double)buf[0], (double)buf[1], (double)buf[2], (double)buf[3]);
+        }
         return ok;
     }
     /* Q8_0 path */
