@@ -13745,17 +13745,26 @@ int ds4_gpu_matmul_nvfp4_tensor(
     (void)n_tok;
     /* NVFP4 weight layout in safetensors:
      *   weight: U8, shape=[out_dim, in_dim/2] — packed 4-bit weights
-     *   scale: F8_E4M3, shape=[out_dim, in_dim/16] — block scales (separate tensor)
-     * Kernel expects: w (packed weights), ws (scales)
+     *   weight_scale: F8_E4M3, shape=[out_dim, in_dim/8] — block scales (1 per 8 elements)
+     *   weight_scale_2: F32 scalar — global scale
+     *   input_scale: F32 scalar — input scale (not used in GEMV)
+     * Kernel expects: w (packed weights), ws (scales), ws2 (global scale)
      */
     uint64_t weight_bytes = out_dim * (in_dim / 2);
     const char *w = cuda_model_range_ptr(model_map, weight_offset, weight_bytes, "nvfp4");
     if (!w) return 0;
     
     const uint8_t *ws = NULL;
+    float ws2 = 0.0f;
     if (scale_offset != 0) {
-        uint64_t scale_bytes = out_dim * (in_dim / 16);
+        /* Block scales: [out_dim, in_dim/8] */
+        uint64_t scale_bytes = out_dim * (in_dim / 8);
         ws = (const uint8_t *)cuda_model_range_ptr(model_map, scale_offset, scale_bytes, "nvfp4_scale");
+        /* Global scale is right after block scales: F32 scalar */
+        uint64_t global_scale_offset = scale_offset + scale_bytes;
+        const float *gs = (const float *)cuda_model_range_ptr(model_map, global_scale_offset,
+                                                              sizeof(float), "nvfp4_ws2");
+        if (gs) ws2 = *gs;
     }
     if (!ws) {
         fprintf(stderr, "ds4: NVFP4 GEMV: no scale tensor at offset %llu (in=%llu out=%llu)\n",
@@ -14217,14 +14226,16 @@ __global__ void gemv_nvfp4_kernel(const float *x, const uint8_t *w, const uint8_
     if (row >= M) return;
     float sum = 0.0f;
     int K_packed = K / 2;            /* bytes per row */
-    int scales_per_row = K / 16;     /* 1 scale per 16 values (safetensors) */
+    int scales_per_row = K / 8;      /* 1 F8_E4M3 scale per 8 values */
     for (int j = 0; j < K_packed; j++) {
         uint8_t p = w[row * K_packed + j];
+        int elem_idx = j * 2;
+        int scale_idx = elem_idx / 8;
+        float sc = d_f8e4m3(ws[row * scales_per_row + scale_idx]);
         /* Lower nibble: even index */
-        float sc = d_f8e4m3(ws[row * scales_per_row + j/8]);
-        sum += d_e2m1(p & 0xF) * ws2 * sc * x[j * 2];
-        /* Upper nibble: odd index (same scale, same byte group) */
-        sum += d_e2m1(p >> 4) * ws2 * sc * x[j * 2 + 1];
+        sum += d_e2m1(p & 0xF) * ws2 * sc * x[elem_idx];
+        /* Upper nibble: odd index (same scale) */
+        sum += d_e2m1(p >> 4) * ws2 * sc * x[elem_idx + 1];
     }
     y[row] = sum;
 }
