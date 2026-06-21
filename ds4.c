@@ -16659,6 +16659,12 @@ static bool metal_graph_encode_decode_layer(
                                                       layer->ffn_up_shexp->type, layer->ffn_up_shexp->scale_offset) != 0;
             if (ok) ok = ds4_gpu_swiglu_tensor(g->shared_mid, g->shared_gate, g->shared_up,
                                                shared_dim, DS4_SWIGLU_CLAMP_EXP, 1.0f) != 0;
+        if (ok && il == 0) {
+            float buf[4];
+            if (ds4_gpu_synchronize() && ds4_gpu_tensor_read(g->shared_mid, 0, buf, sizeof(buf)))
+                fprintf(stderr, "ds4: L%u shared_mid[0..3]=%g %g %g %g\n",
+                        il, (double)buf[0], (double)buf[1], (double)buf[2], (double)buf[3]);
+        }
         }
         DS4_METAL_PROFILE_DECODE_STAGE("shared_gate_up");
         if (ok) ok = ds4_gpu_routed_moe_one_tensor(g->routed_out,
@@ -16802,6 +16808,12 @@ static bool metal_graph_encode_decode_layer(
                                                       layer->ffn_up_shexp->type, layer->ffn_up_shexp->scale_offset) != 0;
             if (ok) ok = ds4_gpu_swiglu_tensor(g->shared_mid, g->shared_gate, g->shared_up,
                                                shared_dim, DS4_SWIGLU_CLAMP_EXP, 1.0f) != 0;
+        if (ok && il == 0) {
+            float buf[4];
+            if (ds4_gpu_synchronize() && ds4_gpu_tensor_read(g->shared_mid, 0, buf, sizeof(buf)))
+                fprintf(stderr, "ds4: L%u shared_mid[0..3]=%g %g %g %g\n",
+                        il, (double)buf[0], (double)buf[1], (double)buf[2], (double)buf[3]);
+        }
         }
         DS4_METAL_PROFILE_DECODE_STAGE("shared_gate_up");
         if (ok && !fuse_shared_down_hc) {
@@ -17052,6 +17064,12 @@ static bool metal_graph_encode_decode_layer(
 #undef DS4_METAL_PROFILE_DECODE_STAGE
     if (ok) {
         metal_graph_debug_dump_tensor("hc_ffn_post", g->after_ffn_hc, hc_dim, il, pos);
+    }
+    { /* debug: check after_ffn_hc */
+        float buf[4];
+        if (ok && ds4_gpu_synchronize() && ds4_gpu_tensor_read(g->after_ffn_hc, 0, buf, sizeof(buf)))
+            fprintf(stderr, "ds4: L%u after_ffn_hc[0..3]=%g %g %g %g\n",
+                    il, (double)buf[0], (double)buf[1], (double)buf[2], (double)buf[3]);
     }
     { /* debug: check cur_hc after layer */
         float buf[4];
