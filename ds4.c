@@ -23994,6 +23994,23 @@ static int generate_raw_swa_cpu(
         int token = sample_argmax(logits, DS4_N_VOCAB);
         if (token == vocab->eos_id) break;
 
+        {
+            static int dbg_gen = 0;
+            if (dbg_gen < 3) {
+                float top[3] = {-1e30f, -1e30f, -1e30f};
+                int topi[3] = {-1, -1, -1};
+                for (uint32_t v = 0; v < DS4_N_VOCAB; v++) {
+                    float lv = logits[v];
+                    if (lv > top[0]) { top[2] = top[1]; topi[2] = topi[1]; top[1] = top[0]; topi[1] = topi[0]; top[0] = lv; topi[0] = v; }
+                    else if (lv > top[1]) { top[2] = top[1]; topi[2] = topi[1]; top[1] = lv; topi[1] = v; }
+                    else if (lv > top[2]) { top[2] = lv; topi[2] = v; }
+                }
+                fprintf(stderr, "ds4: gen2 token=%d logit=%.4f top3: (%d,%.4f) (%d,%.4f) (%d,%.4f)\n",
+                        token, logits[token], topi[0], top[0], topi[1], top[1], topi[2], top[2]);
+                dbg_gen++;
+            }
+        }
+
         if (emit) emit(emit_ud, token);
         n_generated++;
 
@@ -24167,6 +24184,23 @@ static int generate_metal_graph_raw_swa(
 
         int token = sample_argmax(logits, DS4_N_VOCAB);
         if (token == vocab->eos_id) break;
+
+        {
+            static int dbg_gen = 0;
+            if (dbg_gen < 3) {
+                float top[3] = {-1e30f, -1e30f, -1e30f};
+                int topi[3] = {-1, -1, -1};
+                for (uint32_t v = 0; v < DS4_N_VOCAB; v++) {
+                    float lv = logits[v];
+                    if (lv > top[0]) { top[2] = top[1]; topi[2] = topi[1]; top[1] = top[0]; topi[1] = topi[0]; top[0] = lv; topi[0] = v; }
+                    else if (lv > top[1]) { top[2] = top[1]; topi[2] = topi[1]; top[1] = lv; topi[1] = v; }
+                    else if (lv > top[2]) { top[2] = lv; topi[2] = v; }
+                }
+                fprintf(stderr, "ds4: gen2 token=%d logit=%.4f top3: (%d,%.4f) (%d,%.4f) (%d,%.4f)\n",
+                        token, logits[token], topi[0], top[0], topi[1], top[1], topi[2], top[2]);
+                dbg_gen++;
+            }
+        }
 
         if (emit) emit(emit_ud, token);
         n_generated++;
@@ -28149,6 +28183,22 @@ int ds4_session_common_prefix(ds4_session *s, const ds4_tokens *prompt) {
 }
 
 int ds4_session_argmax(ds4_session *s) {
+    {
+        static int dbg_log = 0;
+        if (dbg_log < 3 && s->logits) {
+            float top[3] = {-1e30f, -1e30f, -1e30f};
+            int topi[3] = {-1, -1, -1};
+            for (uint32_t v = 0; v < DS4_N_VOCAB; v++) {
+                float lv = s->logits[v];
+                if (lv > top[0]) { top[2] = top[1]; topi[2] = topi[1]; top[1] = top[0]; topi[1] = topi[0]; top[0] = lv; topi[0] = v; }
+                else if (lv > top[1]) { top[2] = top[1]; topi[2] = topi[1]; top[1] = lv; topi[1] = v; }
+                else if (lv > top[2]) { top[2] = lv; topi[2] = v; }
+            }
+            fprintf(stderr, "ds4: logits top3: (%d,%.4f) (%d,%.4f) (%d,%.4f)\n",
+                    topi[0], top[0], topi[1], top[1], topi[2], top[2]);
+            dbg_log++;
+        }
+    }
     return sample_argmax(s->logits, DS4_N_VOCAB);
 }
 
