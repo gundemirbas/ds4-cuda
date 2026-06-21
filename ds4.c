@@ -16687,6 +16687,12 @@ static bool metal_graph_encode_decode_layer(
                                                      DS4_N_EXPERT,
                                                      DS4_N_EXPERT_USED, DS4_SWIGLU_CLAMP_EXP, g->ffn_norm,
                                                      il) != 0;
+        { /* debug: check routed_out */
+            float buf[4];
+            if (ok && ds4_gpu_synchronize() && ds4_gpu_tensor_read(g->routed_out, 0, buf, sizeof(buf)))
+                fprintf(stderr, "ds4: L%u routed_out[0..3]=%g %g %g %g\n",
+                        il, (double)buf[0], (double)buf[1], (double)buf[2], (double)buf[3]);
+        }
         DS4_METAL_PROFILE_DECODE_STAGE("routed_moe");
         if (ok) {
             metal_graph_debug_dump_tensor("ffn_moe_gate_clamped", g->routed_gate,
@@ -16874,6 +16880,12 @@ static bool metal_graph_encode_decode_layer(
                                                      DS4_N_EXPERT,
                                                      DS4_N_EXPERT_USED, DS4_SWIGLU_CLAMP_EXP, g->ffn_norm,
                                                      il) != 0;
+        { /* debug: check routed_out */
+            float buf[4];
+            if (ok && ds4_gpu_synchronize() && ds4_gpu_tensor_read(g->routed_out, 0, buf, sizeof(buf)))
+                fprintf(stderr, "ds4: L%u routed_out[0..3]=%g %g %g %g\n",
+                        il, (double)buf[0], (double)buf[1], (double)buf[2], (double)buf[3]);
+        }
         DS4_METAL_PROFILE_DECODE_STAGE("routed_moe");
         if (ok) {
             metal_graph_debug_dump_tensor("ffn_moe_gate_clamped", g->routed_gate,
