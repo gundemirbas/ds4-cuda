@@ -17058,6 +17058,12 @@ static bool metal_graph_encode_output_head(
         uint64_t               vocab_dim) {
     const uint64_t hc_dim = (uint64_t)DS4_N_HC * DS4_N_EMBD;
     bool ok = ds4_gpu_rms_norm_plain_tensor(g->flat_hc, g->cur_hc, (uint32_t)hc_dim, DS4_RMS_EPS) != 0;
+    { /* debug: check flat_hc after norm */
+        float buf[4];
+        if (ds4_gpu_synchronize() && ds4_gpu_tensor_read(g->flat_hc, 0, buf, sizeof(buf)))
+            fprintf(stderr, "ds4: output_flat_hc[0..3]=%g %g %g %g\n",
+                    (double)buf[0], (double)buf[1], (double)buf[2], (double)buf[3]);
+    }
     if (ok) ok = ds4_gpu_matmul_tensor(g->output_pre,
                                              model->map,
                                              model->size,
@@ -17068,6 +17074,12 @@ static bool metal_graph_encode_output_head(
                                              1,
                                              weights->output_hc_fn->type,
                                              weights->output_hc_fn->scale_offset) != 0;
+    { /* debug: check output_pre */
+        float buf[4];
+        if (ok && ds4_gpu_synchronize() && ds4_gpu_tensor_read(g->output_pre, 0, buf, sizeof(buf)))
+            fprintf(stderr, "ds4: output_pre[0..3]=%g %g %g %g\n",
+                    (double)buf[0], (double)buf[1], (double)buf[2], (double)buf[3]);
+    }
     if (ok) {
         metal_graph_debug_dump_tensor("result_hc_pre", g->output_pre, DS4_N_HC, DS4_N_LAYER, 0);
     }
@@ -17090,6 +17102,12 @@ static bool metal_graph_encode_output_head(
     if (ok) {
         metal_graph_debug_dump_tensor("result_hc", g->output_embd, DS4_N_EMBD, DS4_N_LAYER, 0);
     }
+    { /* debug: check output_embd */
+        float buf[4];
+        if (ok && ds4_gpu_synchronize() && ds4_gpu_tensor_read(g->output_embd, 0, buf, sizeof(buf)))
+            fprintf(stderr, "ds4: output_embd[0..3]=%g %g %g %g\n",
+                    (double)buf[0], (double)buf[1], (double)buf[2], (double)buf[3]);
+    }
     if (ok) ok = ds4_gpu_rms_norm_weight_tensor(g->output_norm,
                                                   g->output_embd,
                                                   model->map,
@@ -17098,6 +17116,12 @@ static bool metal_graph_encode_output_head(
                                                   DS4_N_EMBD,
                                                   DS4_RMS_EPS,
                                                   weights->output_norm->type == DS4_TENSOR_BF16) != 0;
+    { /* debug: check output_norm */
+        float buf[4];
+        if (ok && ds4_gpu_synchronize() && ds4_gpu_tensor_read(g->output_norm, 0, buf, sizeof(buf)))
+            fprintf(stderr, "ds4: output_norm[0..3]=%g %g %g %g\n",
+                    (double)buf[0], (double)buf[1], (double)buf[2], (double)buf[3]);
+    }
     if (ok) {
         metal_graph_debug_dump_tensor("result_norm", g->output_norm, DS4_N_EMBD, DS4_N_LAYER, 0);
     }
@@ -17110,6 +17134,12 @@ static bool metal_graph_encode_output_head(
                                               g->output_norm,
                                               1,
                                               weights->output->type, weights->output->scale_offset) != 0;
+    { /* debug: check logits */
+        float buf[4];
+        if (ok && ds4_gpu_synchronize() && ds4_gpu_tensor_read(g->logits, 0, buf, sizeof(buf)))
+            fprintf(stderr, "ds4: logits[0..3]=%g %g %g %g\n",
+                    (double)buf[0], (double)buf[1], (double)buf[2], (double)buf[3]);
+    }
     if (ok) {
         metal_graph_debug_dump_tensor("result_output", g->logits, vocab_dim, DS4_N_LAYER, 0);
     }
