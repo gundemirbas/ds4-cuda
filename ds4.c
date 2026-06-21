@@ -16637,7 +16637,9 @@ static bool metal_graph_encode_decode_layer(
                                                              shared_dim,
                                                              g->ffn_norm,
                                                              DS4_SWIGLU_CLAMP_EXP,
-                                                             layer->ffn_gate_shexp->type, layer->ffn_gate_shexp->scale_offset) != 0;
+                                                             layer->ffn_gate_shexp->type,
+                                                             layer->ffn_gate_shexp->scale_offset,
+                                                             layer->ffn_up_shexp->scale_offset) != 0;
         } else if (ok) {
             if (ok) ok = matmul_auto_tensor(g->shared_gate, model->map, model->size,
                                                       layer->ffn_gate_shexp->abs_offset,
@@ -16778,7 +16780,9 @@ static bool metal_graph_encode_decode_layer(
                                                              shared_dim,
                                                              g->ffn_norm,
                                                              DS4_SWIGLU_CLAMP_EXP,
-                                                             layer->ffn_gate_shexp->type, layer->ffn_gate_shexp->scale_offset) != 0;
+                                                             layer->ffn_gate_shexp->type,
+                                                             layer->ffn_gate_shexp->scale_offset,
+                                                             layer->ffn_up_shexp->scale_offset) != 0;
         } else if (ok) {
             if (ok) ok = matmul_auto_tensor(g->shared_gate, model->map, model->size,
                                                       layer->ffn_gate_shexp->abs_offset,
@@ -16967,7 +16971,9 @@ static bool metal_graph_encode_decode_layer(
                                                          shared_dim,
                                                          g->ffn_norm,
                                                          DS4_SWIGLU_CLAMP_EXP,
-                                                         layer->ffn_gate_shexp->type, layer->ffn_gate_shexp->scale_offset) != 0;
+                                                         layer->ffn_gate_shexp->type,
+                                                             layer->ffn_gate_shexp->scale_offset,
+                                                             layer->ffn_up_shexp->scale_offset) != 0;
     } else {
         if (ok) ok = matmul_auto_tensor(g->shared_gate, model->map, model->size,
                                                   layer->ffn_gate_shexp->abs_offset,

@@ -289,7 +289,8 @@ int ds4_gpu_shared_gate_up_swiglu_q8_0_tensor(
         const ds4_gpu_tensor *x,
         float                   clamp,
         uint32_t                weight_type,
-        uint64_t                scale_offset);
+        uint64_t                gate_scale_offset,
+        uint64_t                up_scale_offset);
 
 int ds4_gpu_matmul_f16_tensor(
         ds4_gpu_tensor       *out,

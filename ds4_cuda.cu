@@ -9752,14 +9752,22 @@ extern "C" int ds4_gpu_shared_gate_up_swiglu_q8_0_tensor(
         const ds4_gpu_tensor *x,
         float                   clamp,
         uint32_t                weight_type,
-        uint64_t                scale_offset) {
+        uint64_t                gate_scale_offset,
+        uint64_t                up_scale_offset) {
     /* Type-aware dispatch */
-    if (weight_type == 35 /* DS4_TENSOR_NVFP4 */ || weight_type == 34 /* DS4_TENSOR_F8_E4M3 */) {
-        /* For NVFP4/F8: do two separate matmuls */
+    if (weight_type == 35 /* DS4_TENSOR_NVFP4 */) {
         int ok = ds4_gpu_matmul_nvfp4_tensor(gate, model_map, model_size,
-                                              gate_offset, in_dim, out_dim, x, 1, scale_offset);
+                                              gate_offset, in_dim, out_dim, x, 1, gate_scale_offset);
         if (ok) ok = ds4_gpu_matmul_nvfp4_tensor(up, model_map, model_size,
-                                                   up_offset, in_dim, out_dim, x, 1, scale_offset);
+                                                   up_offset, in_dim, out_dim, x, 1, up_scale_offset);
+        if (ok) ok = ds4_gpu_swiglu_tensor(mid, gate, up, (uint32_t)out_dim, clamp, 1.0f);
+        return ok;
+    }
+    if (weight_type == 34 /* DS4_TENSOR_F8_E4M3 */) {
+        int ok = ds4_gpu_matmul_f8e4m3_tensor(gate, model_map, model_size,
+                                               gate_offset, in_dim, out_dim, x, 1, gate_scale_offset);
+        if (ok) ok = ds4_gpu_matmul_f8e4m3_tensor(up, model_map, model_size,
+                                                    up_offset, in_dim, out_dim, x, 1, up_scale_offset);
         if (ok) ok = ds4_gpu_swiglu_tensor(mid, gate, up, (uint32_t)out_dim, clamp, 1.0f);
         return ok;
     }
@@ -13539,10 +13547,18 @@ extern "C" int ds4_gpu_shared_down_hc_expand_q8_0_tensor(
         uint32_t                weight_type,
         uint64_t                scale_offset) {
     /* For NVFP4/F8: use separate matmul + hc expand */
-    if (weight_type == 35 /* NVFP4 */ || weight_type == 34 /* F8_E4M3 */) {
+    if (weight_type == 35 /* NVFP4 */) {
         int ok = ds4_gpu_matmul_nvfp4_tensor(shared_out, model_map, model_size,
                                               weight_offset, in_dim, out_dim,
                                               shared_mid, 1, scale_offset);
+        if (ok) ok = ds4_gpu_hc_expand_add_split_tensor(out_hc, shared_out, routed_out,
+                                                         residual_hc, split, n_embd, n_hc);
+        return ok;
+    }
+    if (weight_type == 34 /* F8_E4M3 */) {
+        int ok = ds4_gpu_matmul_f8e4m3_tensor(shared_out, model_map, model_size,
+                                               weight_offset, in_dim, out_dim,
+                                               shared_mid, 1, scale_offset);
         if (ok) ok = ds4_gpu_hc_expand_add_split_tensor(out_hc, shared_out, routed_out,
                                                          residual_hc, split, n_embd, n_hc);
         return ok;
