@@ -12587,6 +12587,8 @@ static int routed_moe_launch(
         mid->bytes < (uint64_t)n_tokens * n_expert * expert_mid_dim * sizeof(float) ||
         down->bytes < (uint64_t)n_tokens * n_expert * out_dim * sizeof(float) ||
         out->bytes < (uint64_t)n_tokens * out_dim * sizeof(float)) {
+        fprintf(stderr, "ds4: routed_moe L%u failed validation (tok=%u expert=%u in=%u mid=%u out=%u)\n",
+                layer_index, n_tokens, n_expert, expert_in_dim, expert_mid_dim, out_dim);
         return 0;
     }
     const int q4k_path = (gate_type == 12u && down_type == 12u);
