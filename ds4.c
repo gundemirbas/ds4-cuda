@@ -15875,6 +15875,7 @@ static bool metal_graph_encode_decode_layer(
                                                                     g->attn_norm,
                                                                     1,
                                                                     layer->attn_q_a->type, layer->attn_q_a->scale_offset) != 0;
+    if (!ok) fprintf(stderr, "ds4: L%u FAILED after Q/R matmul\n", il);
     if (ok) {
         metal_graph_debug_dump_tensor("q_lora", g->qr, q_rank, il, pos);
     }
