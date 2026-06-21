@@ -20302,6 +20302,7 @@ static bool metal_graph_eval_token_raw_swa_streaming(
                                                  raw_row,
                                                  n_raw,
                                                  token);
+            if (!ok) fprintf(stderr, "ds4: FAILED at layer %u (decode)\n", il);
             if (ok) {
                 ds4_gpu_tensor *tmp = g->cur_hc;
                 g->cur_hc = g->after_ffn_hc;
