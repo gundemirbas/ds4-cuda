@@ -16381,6 +16381,13 @@ static bool metal_graph_encode_decode_layer(
     const bool fuse_attn_out_hc =
         !metal_graph_directional_steering_attn_enabled(g) &&
         !metal_graph_use_reference_attn_out_hc();
+    if (ok && fuse_attn_out_hc && il == 0) {
+        fprintf(stderr, "ds4: L0 attn_output_a type=%u scale_off=%llu\n",
+                layer->attn_output_a->type, (unsigned long long)layer->attn_output_a->scale_offset);
+        fprintf(stderr, "ds4: L0 attn_output_b type=%u scale_off=%llu\n",
+                layer->attn_output_b->type, (unsigned long long)layer->attn_output_b->scale_offset);
+        fprintf(stderr, "ds4: L0 n_groups=%u rank=%u\n", n_groups, rank);
+    }
     if (ok && fuse_attn_out_hc) {
         ok = ds4_gpu_attention_output_low_q8_tensor(g->attn_low,
                                                       model->map,
