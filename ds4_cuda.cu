@@ -8246,7 +8246,7 @@ extern "C" int ds4_gpu_rms_norm_weight_tensor(ds4_gpu_tensor *out, const ds4_gpu
         model_size - weight_offset < src_bytes ||
         out->bytes < (uint64_t)n * sizeof(float) ||
         x->bytes < (uint64_t)n * sizeof(float)) return 0;
-    const char *wptr = cuda_model_range_ptr(model_map, weight_offset, src_bytes, "rms_weight");
+    const char *wptr = (const char *)model_map + weight_offset;
     if (!wptr) return 0;
     /* Convert norm weights to F32 and copy to GPU — mmap pointers may not be
      * accessible from all kernel address spaces on GB10. */
@@ -8280,7 +8280,7 @@ extern "C" int ds4_gpu_rms_norm_weight_rows_tensor(ds4_gpu_tensor *out, const ds
         model_size - weight_offset < src_bytes ||
         out->bytes < (uint64_t)n * rows * sizeof(float) ||
         x->bytes < (uint64_t)n * rows * sizeof(float)) return 0;
-    const char *wptr = cuda_model_range_ptr(model_map, weight_offset, src_bytes, "rms_weight");
+    const char *wptr = (const char *)model_map + weight_offset;
     if (!wptr) return 0;
     float *tmp = (float *)malloc((size_t)n * sizeof(float));
     if (!tmp) return 0;
@@ -13293,13 +13293,12 @@ extern "C" int ds4_gpu_hc_split_weighted_sum_norm_tensor(
                 residual_hc->bytes < n_rows * residual_row_bytes) {
                 return 0;
             }
-            const float *scale_h = (const float *)cuda_model_range_ptr(model_map, scale_offset,
-                    3ull * sizeof(float), "hc_scale");
-            const float *base_h = (const float *)cuda_model_range_ptr(model_map, base_offset,
-                    mix_bytes, "hc_base");
-            const char *norm_w_src = cuda_model_range_ptr(model_map, norm_weight_offset,
-                    norm_src_bytes, "hc_norm_weight");
-            if (!scale_h || !base_h || !norm_w_src) return 0;
+            const char *scale_src = (const char *)model_map + scale_offset;
+            const char *base_src = (const char *)model_map + base_offset;
+            const char *norm_w_src = (const char *)model_map + norm_weight_offset;
+            if (!scale_src || !base_src || !norm_w_src) return 0;
+            const float *scale_h = (const float *)scale_src;
+            const float *base_h = (const float *)base_src;
             /* Copy weights to GPU — mmap pointers may not be accessible from GPU on GB10 */
             float *d_scale = NULL, *d_base = NULL, *d_norm_w = NULL;
             float *tmp_s = (float *)malloc(3 * sizeof(float));
