@@ -13279,24 +13279,49 @@ extern "C" int ds4_gpu_hc_split_weighted_sum_norm_tensor(
                 residual_hc->bytes < n_rows * residual_row_bytes) {
                 return 0;
             }
-            const float *scale = (const float *)cuda_model_range_ptr(model_map, scale_offset,
+            const float *scale_h = (const float *)cuda_model_range_ptr(model_map, scale_offset,
                     3ull * sizeof(float), "hc_scale");
-            const float *base = (const float *)cuda_model_range_ptr(model_map, base_offset,
+            const float *base_h = (const float *)cuda_model_range_ptr(model_map, base_offset,
                     mix_bytes, "hc_base");
-            const float *norm_w = (const float *)cuda_model_range_ptr(model_map, norm_weight_offset,
+            const float *norm_w_h = (const float *)cuda_model_range_ptr(model_map, norm_weight_offset,
                     (uint64_t)n_embd * sizeof(float), "hc_norm_weight");
-            if (!scale || !base || !norm_w) return 0;
+            if (!scale_h || !base_h || !norm_w_h) return 0;
+            /* Copy weights to GPU — mmap pointers may not be accessible from GPU on GB10 */
+            float *d_scale = NULL, *d_base = NULL, *d_norm_w = NULL;
+            float *tmp_s = (float *)malloc(3 * sizeof(float));
+            float *tmp_b = (float *)malloc(mix_bytes);
+            float *tmp_n = (float *)malloc((uint64_t)n_embd * sizeof(float));
+            if (!tmp_s || !tmp_b || !tmp_n) {
+                free(tmp_s); free(tmp_b); free(tmp_n); return 0;
+            }
+            memcpy(tmp_s, scale_h, 3 * sizeof(float));
+            memcpy(tmp_b, base_h, mix_bytes);
+            memcpy(tmp_n, norm_w_h, (uint64_t)n_embd * sizeof(float));
+            cudaMalloc(&d_scale, 3 * sizeof(float));
+            cudaMalloc(&d_base, mix_bytes);
+            cudaMalloc(&d_norm_w, (uint64_t)n_embd * sizeof(float));
+            if (!d_scale || !d_base || !d_norm_w) {
+                free(tmp_s); free(tmp_b); free(tmp_n);
+                cudaFree(d_scale); cudaFree(d_base); cudaFree(d_norm_w);
+                return 0;
+            }
+            cudaMemcpy(d_scale, tmp_s, 3 * sizeof(float), cudaMemcpyHostToDevice);
+            cudaMemcpy(d_base, tmp_b, mix_bytes, cudaMemcpyHostToDevice);
+            cudaMemcpy(d_norm_w, tmp_n, (uint64_t)n_embd * sizeof(float), cudaMemcpyHostToDevice);
+            free(tmp_s); free(tmp_b); free(tmp_n);
             hc_split_weighted_sum_norm_fused_kernel<<<(uint32_t)n_rows, 256>>>(
                     (float *)out->ptr,
                     (float *)norm_out->ptr,
                     (float *)split->ptr,
                     (const float *)mix->ptr,
                     (const float *)residual_hc->ptr,
-                    scale,
-                    base,
-                    norm_w,
+                    d_scale,
+                    d_base,
+                    d_norm_w,
                     n_embd, n_hc, (uint32_t)n_rows, sinkhorn_iters, eps, norm_eps);
-            return cuda_ok(cudaGetLastError(), "hc split weighted sum norm launch");
+            cudaError_t ce = cudaDeviceSynchronize();
+            cudaFree(d_scale); cudaFree(d_base); cudaFree(d_norm_w);
+            return cuda_ok(ce, "hc split weighted sum norm launch");
         }
     }
     return ds4_gpu_hc_split_weighted_sum_tensor(out, split, mix, residual_hc,
