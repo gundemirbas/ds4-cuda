@@ -2201,9 +2201,11 @@ static bool model_open_safetensors(ds4_model *m, const char *model_dir,
             
             /* Set offsets: abs_offset is global offset into the unified virtual mmap.
              * shard_virt_offset is this shard's base offset in the virtual mapping.
-             * st->data_offset is the offset within the shard file. */
-            t->abs_offset = shard_virt_offset + st->data_offset;
-            t->rel_offset = shard_virt_offset + st->data_offset;
+             * sm->data_offset is the shard's data section start (8 + header_size).
+             * st->data_offset is the offset within the data section (from safetensors header).
+             * safetensors data_offsets are relative to the data section, not the file. */
+            t->abs_offset = shard_virt_offset + sm->data_offset + st->data_offset;
+            t->rel_offset = shard_virt_offset + sm->data_offset + st->data_offset;
             t->bytes = st->data_size;
             t->scale_offset = 0;  /* will be set below if scale tensor exists */
             
