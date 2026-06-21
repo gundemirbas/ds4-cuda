@@ -8331,10 +8331,8 @@ extern "C" int ds4_gpu_dsv4_qkv_rms_norm_rows_tensor(
             kv->bytes < (uint64_t)kv_n * rows * sizeof(float)) {
             return 0;
         }
-        const float *q_w = (const float *)cuda_model_range_ptr(model_map,
-                q_weight_offset, (uint64_t)q_n * sizeof(float), "q_rms_weight");
-        const float *kv_w = (const float *)cuda_model_range_ptr(model_map,
-                kv_weight_offset, (uint64_t)kv_n * sizeof(float), "kv_rms_weight");
+        const float *q_w = (const float *)((const char *)model_map + q_weight_offset);
+        const float *kv_w = (const float *)((const char *)model_map + kv_weight_offset);
         if (!q_w || !kv_w) return 0;
         /* Copy small RMS norm weights to GPU — UVA pointers from mmap may not
          * be accessible from all kernel address spaces. */
