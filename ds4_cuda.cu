@@ -8242,6 +8242,18 @@ extern "C" int ds4_gpu_rms_norm_weight_tensor(ds4_gpu_tensor *out, const ds4_gpu
     cudaMemcpy(d_w, tmp, w_bytes, cudaMemcpyHostToDevice);
     free(tmp);
     (void)cudaGetLastError();
+    /* Debug: check weight data */
+    {
+        static int dbg = 0;
+        if (dbg < 3) {
+            fprintf(stderr, "ds4: rms_norm_weight: weight_offset=%llu n=%u w[0..3]=%f %f %f %f\n",
+                    (unsigned long long)weight_offset, n, tmp[0], tmp[1], tmp[2], tmp[3]);
+            fprintf(stderr, "ds4: rms_norm_weight: x[0..3]=%f %f %f %f\n",
+                    ((const float*)x->ptr)[0], ((const float*)x->ptr)[1],
+                    ((const float*)x->ptr)[2], ((const float*)x->ptr)[3]);
+            dbg++;
+        }
+    }
     rms_norm_weight_kernel<<<1, 256>>>((float *)out->ptr, (const float *)x->ptr, d_w, n, 1, eps);
     cudaError_t launch_err = cudaDeviceSynchronize();
     if (launch_err != cudaSuccess) {
