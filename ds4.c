@@ -24002,6 +24002,23 @@ static int generate_raw_swa_cpu(
             break;
         }
 
+        {
+            static int dbg_gen = 0;
+            if (dbg_gen < 3) {
+                float top[3] = {-1e30f, -1e30f, -1e30f};
+                int topi[3] = {-1, -1, -1};
+                for (uint32_t v = 0; v < DS4_N_VOCAB; v++) {
+                    float lv = logits[v];
+                    if (lv > top[0]) { top[2] = top[1]; topi[2] = topi[1]; top[1] = top[0]; topi[1] = topi[0]; top[0] = lv; topi[0] = v; }
+                    else if (lv > top[1]) { top[2] = top[1]; topi[2] = topi[1]; top[1] = lv; topi[1] = v; }
+                    else if (lv > top[2]) { top[2] = lv; topi[2] = v; }
+                }
+                fprintf(stderr, "ds4: gen token=%d logit=%.4f top3: (%d,%.4f) (%d,%.4f) (%d,%.4f)\n",
+                        token, logits[token], topi[0], top[0], topi[1], top[1], topi[2], top[2]);
+                dbg_gen++;
+            }
+        }
+
         const double t_eval0 = token_timing ? now_sec() : 0.0;
         /* The CPU decode step is expected to reuse buffers from
          * cpu_decode_scratch.  Keep the allocation guard tightly scoped to the
