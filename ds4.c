@@ -23681,6 +23681,22 @@ int ds4_token_assistant(ds4_engine *e) {
 }
 
 static int sample_argmax(const float *logits, uint32_t n_vocab) {
+    {
+        static int dbg_sam = 0;
+        if (dbg_sam < 3 && logits) {
+            float top[3] = {-1e30f, -1e30f, -1e30f};
+            int topi[3] = {-1, -1, -1};
+            for (uint32_t v = 0; v < n_vocab; v++) {
+                float lv = logits[v];
+                if (lv > top[0]) { top[2] = top[1]; topi[2] = topi[1]; top[1] = top[0]; topi[1] = topi[0]; top[0] = lv; topi[0] = v; }
+                else if (lv > top[1]) { top[2] = top[1]; topi[2] = topi[1]; top[1] = lv; topi[1] = v; }
+                else if (lv > top[2]) { top[2] = lv; topi[2] = v; }
+            }
+            fprintf(stderr, "ds4: SAMPLE top3: (%d,%.4f) (%d,%.4f) (%d,%.4f)\n",
+                    topi[0], top[0], topi[1], top[1], topi[2], top[2]);
+            dbg_sam++;
+        }
+    }
     int best = 0;
     float best_v = DS4_NEG_INF;
     for (uint32_t i = 0; i < n_vocab; i++) {
@@ -23993,7 +24009,17 @@ static int generate_raw_swa_cpu(
 
         int token = sample_argmax(logits, DS4_N_VOCAB);
         fprintf(stderr, "ds4: TOKEN=%d\n", token);
-        if (token == vocab->eos_id) break;       {
+        if (token == vocab->eos_id) break;
+
+        if (emit) emit(emit_ud, token);
+        n_generated++;
+
+        if (i == n_predict - 1 || pos + 1 >= ctx_size) {
+            pos++;
+            break;
+        }
+
+        {
             static int dbg_gen = 0;
             if (dbg_gen < 3) {
                 float top[3] = {-1e30f, -1e30f, -1e30f};
@@ -24183,7 +24209,17 @@ static int generate_metal_graph_raw_swa(
 
         int token = sample_argmax(logits, DS4_N_VOCAB);
         fprintf(stderr, "ds4: TOKEN2=%d\n", token);
-        if (token == vocab->eos_id) break;       {
+        if (token == vocab->eos_id) break;
+
+        if (emit) emit(emit_ud, token);
+        n_generated++;
+
+        if (i == n_predict - 1 || pos + 1 >= ctx_size) {
+            pos++;
+            break;
+        }
+
+        {
             static int dbg_gen = 0;
             if (dbg_gen < 3) {
                 float top[3] = {-1e30f, -1e30f, -1e30f};
