@@ -16355,6 +16355,7 @@ static bool metal_graph_encode_decode_layer(
                                             attn_factor,
                                             DS4_ROPE_YARN_BETA_FAST,
                                             DS4_ROPE_YARN_BETA_SLOW) != 0;
+    if (!ok) fprintf(stderr, "ds4: L%u FAILED after rope_tail\n", il);
     if (ok) {
         metal_graph_debug_dump_tensor("kqv_back", g->heads, q_dim, il, pos);
     }
@@ -16370,6 +16371,7 @@ static bool metal_graph_encode_decode_layer(
                                                       rank,
                                                       n_groups,
                                                       g->heads) != 0;
+        if (!ok) fprintf(stderr, "ds4: L%u FAILED after attn_output_low_q8\n", il);
         if (ok) {
             ok = ds4_gpu_matmul_q8_0_hc_expand_tensor(g->after_attn_hc,
                                                         g->attn_out,
@@ -16384,6 +16386,7 @@ static bool metal_graph_encode_decode_layer(
                                                         DS4_N_EMBD,
                                                         DS4_N_HC,
                                                         layer->attn_output_b->type, layer->attn_output_b->scale_offset) != 0;
+        if (!ok) fprintf(stderr, "ds4: L%u FAILED after hc_expand\n", il);
         }
     } else if (ok) {
         ok = ds4_gpu_attention_output_q8_batch_tensor(g->attn_out,
