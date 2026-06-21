@@ -16454,6 +16454,12 @@ static bool metal_graph_encode_decode_layer(
     if (ok) {
         metal_graph_debug_dump_tensor("hc_attn_post", g->after_attn_hc, hc_dim, il, pos);
     }
+    { /* debug: check after_attn_hc */
+        float buf[4];
+        if (ok && ds4_gpu_synchronize() && ds4_gpu_tensor_read(g->after_attn_hc, 0, buf, sizeof(buf)))
+            fprintf(stderr, "ds4: L%u after_attn_hc[0..3]=%g %g %g %g\n",
+                    il, (double)buf[0], (double)buf[1], (double)buf[2], (double)buf[3]);
+    }
     if (ok) ok = ds4_gpu_rms_norm_plain_tensor(g->flat_hc, g->after_attn_hc, (uint32_t)hc_dim, DS4_RMS_EPS) != 0;
     if (ok) ok = metal_graph_matmul_plain_tensor(g->hc_mix, model, layer->hc_ffn_fn,
                                                  hc_dim, mix_hc, g->flat_hc, 1);
@@ -17046,6 +17052,12 @@ static bool metal_graph_encode_decode_layer(
 #undef DS4_METAL_PROFILE_DECODE_STAGE
     if (ok) {
         metal_graph_debug_dump_tensor("hc_ffn_post", g->after_ffn_hc, hc_dim, il, pos);
+    }
+    { /* debug: check cur_hc after layer */
+        float buf[4];
+        if (ok && ds4_gpu_synchronize() && ds4_gpu_tensor_read(g->cur_hc, 0, buf, sizeof(buf)))
+            fprintf(stderr, "ds4: L%u cur_hc[0..3]=%g %g %g %g\n",
+                    il, (double)buf[0], (double)buf[1], (double)buf[2], (double)buf[3]);
     }
     return ok;
 }
