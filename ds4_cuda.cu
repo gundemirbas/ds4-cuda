@@ -8221,39 +8221,49 @@ extern "C" int ds4_gpu_rms_norm_plain_rows_tensor(ds4_gpu_tensor *out, const ds4
     rms_norm_plain_kernel<<<rows, 256>>>((float *)out->ptr, (const float *)x->ptr, n, rows, eps);
     return cuda_ok(cudaGetLastError(), "rms_norm_plain launch");
 }
-extern "C" int ds4_gpu_rms_norm_weight_tensor(ds4_gpu_tensor *out, const ds4_gpu_tensor *x, const void *model_map, uint64_t model_size, uint64_t weight_offset, uint32_t n, float eps) {
+/* CPU bf16 to float conversion */
+static float cpu_bf16_to_float(unsigned short bf16) {
+    unsigned int sign = (bf16 >> 15) & 1;
+    unsigned int exp = (bf16 >> 7) & 0xFF;
+    unsigned int mant = bf16 & 0x7F;
+    unsigned int f32_bits;
+    if (exp == 0) {
+        if (mant == 0) { f32_bits = sign << 31; }
+        else { exp = 1; while (!(mant & 0x40)) { mant <<= 1; exp--; } mant &= 0x7F; f32_bits = (sign << 31) | ((uint32_t)(exp + 127 - 127) << 23) | (mant << 16); }
+    } else if (exp == 0xFF) {
+        f32_bits = (sign << 31) | 0x7F800000 | (mant << 16);
+    } else {
+        f32_bits = (sign << 31) | ((uint32_t)(exp - 127 + 127) << 23) | (mant << 16);
+    }
+    float result;
+    memcpy(&result, &f32_bits, sizeof(result));
+    return result;
+}
+
+extern "C" int ds4_gpu_rms_norm_weight_tensor(ds4_gpu_tensor *out, const ds4_gpu_tensor *x, const void *model_map, uint64_t model_size, uint64_t weight_offset, uint32_t n, float eps, int norm_is_bf16) {
+    uint64_t src_bytes = norm_is_bf16 ? (uint64_t)n * sizeof(uint16_t) : (uint64_t)n * sizeof(float);
     if (!out || !x || !model_map || weight_offset > model_size ||
-        model_size - weight_offset < (uint64_t)n * sizeof(float) ||
+        model_size - weight_offset < src_bytes ||
         out->bytes < (uint64_t)n * sizeof(float) ||
         x->bytes < (uint64_t)n * sizeof(float)) return 0;
-    const char *wptr = cuda_model_range_ptr(model_map, weight_offset, (uint64_t)n * sizeof(float), "rms_weight");
+    const char *wptr = cuda_model_range_ptr(model_map, weight_offset, src_bytes, "rms_weight");
     if (!wptr) return 0;
-    const float *w = (const float *)wptr;
-    /* Copy small RMS norm weights to GPU — UVA pointers from mmap may not
-     * be accessible from all kernel address spaces. */
+    /* Convert norm weights to F32 and copy to GPU — mmap pointers may not be
+     * accessible from all kernel address spaces on GB10. */
+    float *tmp = (float *)malloc((size_t)n * sizeof(float));
+    if (!tmp) return 0;
+    if (norm_is_bf16) {
+        const uint16_t *bf16 = (const uint16_t *)wptr;
+        for (uint32_t i = 0; i < n; i++) tmp[i] = cpu_bf16_to_float(bf16[i]);
+    } else {
+        memcpy(tmp, wptr, (size_t)n * sizeof(float));
+    }
     float *d_w = NULL;
-    const size_t w_bytes = (size_t)n * sizeof(float);
-    cudaError_t ce = cudaMalloc(&d_w, w_bytes);
-    if (ce != cudaSuccess) { fprintf(stderr, "ds4: rms_norm_weight: cudaMalloc failed: %s\n", cudaGetErrorString(ce)); return 0; }
-    /* Copy via CPU buffer: cudaMemcpy can't read mmap directly on GB10 */
-    float *tmp = (float *)malloc(w_bytes);
-    if (!tmp) { cudaFree(d_w); return 0; }
-    memcpy(tmp, w, w_bytes);
-    cudaMemcpy(d_w, tmp, w_bytes, cudaMemcpyHostToDevice);
+    cudaError_t ce = cudaMalloc(&d_w, (size_t)n * sizeof(float));
+    if (ce != cudaSuccess) { free(tmp); return 0; }
+    cudaMemcpy(d_w, tmp, (size_t)n * sizeof(float), cudaMemcpyHostToDevice);
     free(tmp);
     (void)cudaGetLastError();
-    /* Debug: check weight data */
-    {
-        static int dbg = 0;
-        if (dbg < 3) {
-            fprintf(stderr, "ds4: rms_norm_weight: weight_offset=%llu n=%u w[0..3]=%f %f %f %f\n",
-                    (unsigned long long)weight_offset, n, tmp[0], tmp[1], tmp[2], tmp[3]);
-            fprintf(stderr, "ds4: rms_norm_weight: x[0..3]=%f %f %f %f\n",
-                    ((const float*)x->ptr)[0], ((const float*)x->ptr)[1],
-                    ((const float*)x->ptr)[2], ((const float*)x->ptr)[3]);
-            dbg++;
-        }
-    }
     rms_norm_weight_kernel<<<1, 256>>>((float *)out->ptr, (const float *)x->ptr, d_w, n, 1, eps);
     cudaError_t launch_err = cudaDeviceSynchronize();
     if (launch_err != cudaSuccess) {
@@ -8264,27 +8274,28 @@ extern "C" int ds4_gpu_rms_norm_weight_tensor(ds4_gpu_tensor *out, const ds4_gpu
     cudaFree(d_w);
     return ok;
 }
-extern "C" int ds4_gpu_rms_norm_weight_rows_tensor(ds4_gpu_tensor *out, const ds4_gpu_tensor *x, const void *model_map, uint64_t model_size, uint64_t weight_offset, uint32_t n, uint32_t rows, float eps) {
+extern "C" int ds4_gpu_rms_norm_weight_rows_tensor(ds4_gpu_tensor *out, const ds4_gpu_tensor *x, const void *model_map, uint64_t model_size, uint64_t weight_offset, uint32_t n, uint32_t rows, float eps, int norm_is_bf16) {
+    uint64_t src_bytes = norm_is_bf16 ? (uint64_t)n * sizeof(uint16_t) : (uint64_t)n * sizeof(float);
     if (!out || !x || !model_map || weight_offset > model_size ||
-        model_size - weight_offset < (uint64_t)n * sizeof(float) ||
+        model_size - weight_offset < src_bytes ||
         out->bytes < (uint64_t)n * rows * sizeof(float) ||
         x->bytes < (uint64_t)n * rows * sizeof(float)) return 0;
-    const char *wptr = cuda_model_range_ptr(model_map, weight_offset, (uint64_t)n * sizeof(float), "rms_weight");
+    const char *wptr = cuda_model_range_ptr(model_map, weight_offset, src_bytes, "rms_weight");
     if (!wptr) return 0;
-    const float *w = (const float *)wptr;
+    float *tmp = (float *)malloc((size_t)n * sizeof(float));
+    if (!tmp) return 0;
+    if (norm_is_bf16) {
+        const uint16_t *bf16 = (const uint16_t *)wptr;
+        for (uint32_t i = 0; i < n; i++) tmp[i] = cpu_bf16_to_float(bf16[i]);
+    } else {
+        memcpy(tmp, wptr, (size_t)n * sizeof(float));
+    }
     float *d_w = NULL;
-    const size_t w_bytes = (size_t)n * sizeof(float);
-    if (cudaMalloc(&d_w, w_bytes) != cudaSuccess) return 0;
-    float *tmp = (float *)malloc(w_bytes);
-    if (!tmp) { cudaFree(d_w); return 0; }
-    memcpy(tmp, w, w_bytes);
-    cudaMemcpy(d_w, tmp, w_bytes, cudaMemcpyHostToDevice);
+    if (cudaMalloc(&d_w, (size_t)n * sizeof(float)) != cudaSuccess) { free(tmp); return 0; }
+    cudaMemcpy(d_w, tmp, (size_t)n * sizeof(float), cudaMemcpyHostToDevice);
     free(tmp);
-    /* Clear any stale async error from previous kernels before launching */
     cudaDeviceSynchronize();
     (void)cudaGetLastError();
-    fprintf(stderr, "ds4: DEBUG rms_norm_weight_rows: rows=%u n=%u out_ptr=%p x_ptr=%p d_w=%p\n",
-            rows, n, out->ptr, x->ptr, d_w);
     rms_norm_weight_kernel<<<rows, 256>>>((float *)out->ptr, (const float *)x->ptr, d_w, n, rows, eps);
     cudaError_t launch_err = cudaDeviceSynchronize();
     if (launch_err != cudaSuccess) {
@@ -8361,9 +8372,9 @@ extern "C" int ds4_gpu_dsv4_qkv_rms_norm_rows_tensor(
         return ok;
     }
     return ds4_gpu_rms_norm_weight_rows_tensor(q_out, q, model_map, model_size,
-                                                 q_weight_offset, q_n, rows, eps) &&
+                                                 q_weight_offset, q_n, rows, eps, 0) &&
            ds4_gpu_rms_norm_weight_rows_tensor(kv_out, kv, model_map, model_size,
-                                                 kv_weight_offset, kv_n, rows, eps);
+                                                 kv_weight_offset, kv_n, rows, eps, 0);
 }
 extern "C" int ds4_gpu_head_rms_norm_tensor(ds4_gpu_tensor *x, uint32_t n_tok, uint32_t n_head, uint32_t head_dim, float eps) {
     if (!x || x->bytes < (uint64_t)n_tok * n_head * head_dim * sizeof(float)) return 0;
@@ -8570,7 +8581,7 @@ extern "C" int ds4_gpu_compressor_update_tensor(
     int ok = cuda_ok(cudaGetLastError(), "compressor update pool launch");
     if (ok) ok = ds4_gpu_rms_norm_weight_rows_tensor(comp_row_view, comp_row_view,
                                                        model_map, model_size, norm_offset,
-                                                       head_dim, 1, rms_eps);
+                                                       head_dim, 1, rms_eps, 0);
     if (ok) ok = ds4_gpu_rope_tail_tensor(comp_row_view, 1, 1, head_dim, n_rot,
                                             pos + 1u - ratio, n_ctx_orig, false,
                                             freq_base, freq_scale, ext_factor, attn_factor,
@@ -8687,7 +8698,7 @@ extern "C" int ds4_gpu_compressor_prefill_tensor(
         if (!cuda_ok(cudaGetLastError(), "compressor prefill pool launch")) return 0;
         if (!ds4_gpu_rms_norm_weight_rows_tensor(comp_cache, comp_cache,
                                                    model_map, model_size, norm_offset,
-                                                   head_dim, n_comp, rms_eps)) return 0;
+                                                   head_dim, n_comp, rms_eps, 0)) return 0;
         if (n_rot != 0) {
             const uint32_t pairs = n_comp * (n_rot / 2u);
             rope_tail_kernel<<<(pairs + 255) / 256, 256>>>(
@@ -8762,7 +8773,7 @@ extern "C" int ds4_gpu_compressor_prefill_ratio4_replay_tensor(
     if (!cuda_ok(cudaGetLastError(), "compressor replay pool launch")) return 0;
     if (!ds4_gpu_rms_norm_weight_rows_tensor(comp_cache, comp_cache,
                                                model_map, model_size, norm_offset,
-                                               head_dim, n_comp, rms_eps)) return 0;
+                                               head_dim, n_comp, rms_eps, 0)) return 0;
     if (n_rot != 0) {
         const uint32_t pairs = n_comp * (n_rot / 2u);
         rope_tail_kernel<<<(pairs + 255) / 256, 256>>>(
@@ -13254,7 +13265,8 @@ extern "C" int ds4_gpu_hc_split_weighted_sum_norm_tensor(
         uint32_t                n_hc,
         uint32_t                sinkhorn_iters,
         float                   eps,
-        float                   norm_eps) {
+        float                   norm_eps,
+        int                     norm_is_bf16) {
     if (getenv("DS4_CUDA_DISABLE_HC_SPLIT_NORM_FUSED") == NULL) {
         if (!out || !norm_out || !split || !mix || !residual_hc || !model_map ||
             n_embd == 0 || n_hc != 4) {
@@ -13264,12 +13276,14 @@ extern "C" int ds4_gpu_hc_split_weighted_sum_norm_tensor(
         const uint64_t mix_bytes = mix_hc * sizeof(float);
         const uint64_t out_row_bytes = (uint64_t)n_embd * sizeof(float);
         const uint64_t residual_row_bytes = (uint64_t)n_hc * n_embd * sizeof(float);
+        uint64_t norm_src_bytes = norm_is_bf16 ? (uint64_t)n_embd * sizeof(uint16_t)
+                                                : (uint64_t)n_embd * sizeof(float);
         if (out->bytes < out_row_bytes || out->bytes % out_row_bytes != 0 ||
             norm_out->bytes < out->bytes ||
             scale_offset > model_size || 3ull * sizeof(float) > model_size - scale_offset ||
             base_offset > model_size || mix_bytes > model_size - base_offset ||
             norm_weight_offset > model_size ||
-            (uint64_t)n_embd * sizeof(float) > model_size - norm_weight_offset) {
+            norm_src_bytes > model_size - norm_weight_offset) {
             return 0;
         }
         uint64_t n_rows = out->bytes / out_row_bytes;
@@ -13283,9 +13297,9 @@ extern "C" int ds4_gpu_hc_split_weighted_sum_norm_tensor(
                     3ull * sizeof(float), "hc_scale");
             const float *base_h = (const float *)cuda_model_range_ptr(model_map, base_offset,
                     mix_bytes, "hc_base");
-            const float *norm_w_h = (const float *)cuda_model_range_ptr(model_map, norm_weight_offset,
-                    (uint64_t)n_embd * sizeof(float), "hc_norm_weight");
-            if (!scale_h || !base_h || !norm_w_h) return 0;
+            const char *norm_w_src = cuda_model_range_ptr(model_map, norm_weight_offset,
+                    norm_src_bytes, "hc_norm_weight");
+            if (!scale_h || !base_h || !norm_w_src) return 0;
             /* Copy weights to GPU — mmap pointers may not be accessible from GPU on GB10 */
             float *d_scale = NULL, *d_base = NULL, *d_norm_w = NULL;
             float *tmp_s = (float *)malloc(3 * sizeof(float));
@@ -13296,7 +13310,12 @@ extern "C" int ds4_gpu_hc_split_weighted_sum_norm_tensor(
             }
             memcpy(tmp_s, scale_h, 3 * sizeof(float));
             memcpy(tmp_b, base_h, mix_bytes);
-            memcpy(tmp_n, norm_w_h, (uint64_t)n_embd * sizeof(float));
+            if (norm_is_bf16) {
+                const uint16_t *bf16 = (const uint16_t *)norm_w_src;
+                for (uint32_t i = 0; i < n_embd; i++) tmp_n[i] = cpu_bf16_to_float(bf16[i]);
+            } else {
+                memcpy(tmp_n, norm_w_src, (uint64_t)n_embd * sizeof(float));
+            }
             cudaMalloc(&d_scale, 3 * sizeof(float));
             cudaMalloc(&d_base, mix_bytes);
             cudaMalloc(&d_norm_w, (uint64_t)n_embd * sizeof(float));
@@ -13330,7 +13349,7 @@ extern "C" int ds4_gpu_hc_split_weighted_sum_norm_tensor(
                                                   n_embd, n_hc,
                                                   sinkhorn_iters, eps) &&
            ds4_gpu_rms_norm_weight_tensor(norm_out, out, model_map, model_size,
-                                            norm_weight_offset, n_embd, norm_eps);
+                                            norm_weight_offset, n_embd, norm_eps, norm_is_bf16);
 }
 extern "C" int ds4_gpu_output_hc_weights_tensor(
         ds4_gpu_tensor       *out,

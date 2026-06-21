@@ -14264,7 +14264,8 @@ static bool metal_graph_check_hc_norm_fusion(
                                             model->size,
                                             norm_weight_offset,
                                             DS4_N_EMBD,
-                                            DS4_RMS_EPS) != 0;
+                                            DS4_RMS_EPS,
+                                            0) != 0;
     }
 
     if (ok) ok = ds4_gpu_end_commands() != 0;
@@ -15766,7 +15767,8 @@ static bool metal_graph_encode_decode_layer(
                                                          DS4_N_HC,
                                                          DS4_N_HC_SINKHORN_ITER,
                                                          DS4_HC_EPS,
-                                                         DS4_RMS_EPS) != 0;
+                                                         DS4_RMS_EPS,
+                                                         layer->attn_norm->type == DS4_TENSOR_BF16) != 0;
         if (ok) {
             ok = metal_graph_check_hc_norm_fusion("attn",
                                                   g->attn_cur,
@@ -15813,7 +15815,8 @@ static bool metal_graph_encode_decode_layer(
     if (ok && !fuse_hc_norm) ok = ds4_gpu_rms_norm_weight_tensor(g->attn_norm, g->attn_cur,
                                                                    model->map, model->size,
                                                                    layer->attn_norm->abs_offset,
-                                                                   DS4_N_EMBD, DS4_RMS_EPS) != 0;
+                                                                   DS4_N_EMBD, DS4_RMS_EPS,
+                                                                   layer->attn_norm->type == DS4_TENSOR_BF16) != 0;
     /* Debug: check attn_norm output */
     {
         static int dbg = 0;
@@ -15883,7 +15886,8 @@ static bool metal_graph_encode_decode_layer(
         if (ok) ok = ds4_gpu_rms_norm_weight_tensor(g->qr_norm, g->qr,
                                                       model->map, model->size,
                                                       layer->attn_q_a_norm->abs_offset,
-                                                      (uint32_t)q_rank, DS4_RMS_EPS) != 0;
+                                                      (uint32_t)q_rank, DS4_RMS_EPS,
+                                                      layer->attn_q_a_norm->type == DS4_TENSOR_BF16) != 0;
     }
     if (ok) {
         metal_graph_debug_dump_tensor("q_lora_norm", g->qr_norm, q_rank, il, pos);
@@ -15946,7 +15950,8 @@ static bool metal_graph_encode_decode_layer(
         if (ok) ok = ds4_gpu_rms_norm_weight_tensor(g->kv, g->kv_raw,
                                                       model->map, model->size,
                                                       layer->attn_kv_a_norm->abs_offset,
-                                                      DS4_N_HEAD_DIM, DS4_RMS_EPS) != 0;
+                                                      DS4_N_HEAD_DIM, DS4_RMS_EPS,
+                                                      layer->attn_kv_a_norm->type == DS4_TENSOR_BF16) != 0;
         if (ok) {
             metal_graph_debug_dump_tensor("KVnorm", g->kv, DS4_N_HEAD_DIM, il, pos);
         }
@@ -16406,7 +16411,8 @@ static bool metal_graph_encode_decode_layer(
                                                          DS4_N_HC,
                                                          DS4_N_HC_SINKHORN_ITER,
                                                          DS4_HC_EPS,
-                                                         DS4_RMS_EPS) != 0;
+                                                         DS4_RMS_EPS,
+                                                         layer->ffn_norm->type == DS4_TENSOR_BF16) != 0;
         if (ok) {
             ok = metal_graph_check_hc_norm_fusion("ffn",
                                                   g->ffn_cur,
@@ -16442,7 +16448,8 @@ static bool metal_graph_encode_decode_layer(
     if (ok && !fuse_hc_norm) ok = ds4_gpu_rms_norm_weight_tensor(g->ffn_norm, g->ffn_cur,
                                                                    model->map, model->size,
                                                                    layer->ffn_norm->abs_offset,
-                                                                   DS4_N_EMBD, DS4_RMS_EPS) != 0;
+                                                                   DS4_N_EMBD, DS4_RMS_EPS,
+                                                                   layer->ffn_norm->type == DS4_TENSOR_BF16) != 0;
     DS4_METAL_PROFILE_DECODE_STAGE("ffn_norm");
     if (ok) {
         metal_graph_debug_dump_tensor("ffn_norm", g->ffn_norm, DS4_N_EMBD, il, pos);
@@ -17021,7 +17028,8 @@ static bool metal_graph_encode_output_head(
                                                   model->size,
                                                   weights->output_norm->abs_offset,
                                                   DS4_N_EMBD,
-                                                  DS4_RMS_EPS) != 0;
+                                                  DS4_RMS_EPS,
+                                                  weights->output_norm->type == DS4_TENSOR_BF16) != 0;
     if (ok) {
         metal_graph_debug_dump_tensor("result_norm", g->output_norm, DS4_N_EMBD, DS4_N_LAYER, 0);
     }
@@ -17115,7 +17123,8 @@ static bool metal_graph_encode_output_head_batch(
                                                        weights->output_norm->abs_offset,
                                                        DS4_N_EMBD,
                                                        n_tokens,
-                                                       DS4_RMS_EPS) != 0;
+                                                       DS4_RMS_EPS,
+                                                       weights->output_norm->type == DS4_TENSOR_BF16) != 0;
     if (ok) ok = matmul_auto_tensor(logits,
                                               model->map,
                                               model->size,
@@ -17215,7 +17224,8 @@ static bool metal_graph_encode_output_head_mtp(
                                                   mtp_model->size,
                                                   mtp->norm->abs_offset,
                                                   DS4_N_EMBD,
-                                                  DS4_RMS_EPS) != 0;
+                                                  DS4_RMS_EPS,
+                                                  mtp->norm->type == DS4_TENSOR_BF16) != 0;
     if (ok) ok = matmul_auto_tensor(g->logits,
                                               base_model->map,
                                               base_model->size,
@@ -18330,7 +18340,8 @@ static bool metal_graph_encode_layer_attention_batch(
                                                                  DS4_N_HC,
                                                                  DS4_N_HC_SINKHORN_ITER,
                                                                  DS4_HC_EPS,
-                                                                 DS4_RMS_EPS) != 0;
+                                                                 DS4_RMS_EPS,
+                                                                 layer->attn_norm->type == DS4_TENSOR_BF16) != 0;
     } else {
         if (ok) ok = ds4_gpu_hc_split_weighted_sum_tensor(attn_cur_view,
                                                             hc_split_view,
@@ -18358,7 +18369,8 @@ static bool metal_graph_encode_layer_attention_batch(
                                                   layer->attn_norm->abs_offset,
                                                   DS4_N_EMBD,
                                                   n_tokens,
-                                                  DS4_RMS_EPS) != 0;
+                                                  DS4_RMS_EPS,
+                                                  layer->attn_norm->type == DS4_TENSOR_BF16) != 0;
     }
     if (ok) {
         metal_graph_debug_dump_tensor("attn_norm", g->batch_attn_norm,
@@ -18416,7 +18428,8 @@ static bool metal_graph_encode_layer_attention_batch(
                                                            layer->attn_q_a_norm->abs_offset,
                                                            (uint32_t)q_rank,
                                                            n_tokens,
-                                                           DS4_RMS_EPS) != 0;
+                                                           DS4_RMS_EPS,
+                                                           layer->attn_q_a_norm->type == DS4_TENSOR_BF16) != 0;
     }
     if (ok) {
         metal_graph_debug_dump_tensor("q_lora_norm", g->batch_qr_norm,
@@ -18532,7 +18545,8 @@ static bool metal_graph_encode_layer_attention_batch(
                                                            layer->attn_kv_a_norm->abs_offset,
                                                            DS4_N_HEAD_DIM,
                                                            n_tokens,
-                                                           DS4_RMS_EPS) != 0;
+                                                           DS4_RMS_EPS,
+                                                           layer->attn_kv_a_norm->type == DS4_TENSOR_BF16) != 0;
         if (ok) {
             metal_graph_debug_dump_tensor("KVnorm", g->batch_kv,
                                           (uint64_t)n_tokens * DS4_N_HEAD_DIM, il, pos0);
@@ -19782,7 +19796,8 @@ static bool metal_graph_encode_layer_ffn_batch(
                                                                  DS4_N_HC,
                                                                  DS4_N_HC_SINKHORN_ITER,
                                                                  DS4_HC_EPS,
-                                                                 DS4_RMS_EPS) != 0;
+                                                                 DS4_RMS_EPS,
+                                                                 layer->ffn_norm->type == DS4_TENSOR_BF16) != 0;
     } else {
         if (ok) ok = ds4_gpu_hc_split_weighted_sum_tensor(ffn_cur_view,
                                                             hc_split_view,
@@ -19810,7 +19825,8 @@ static bool metal_graph_encode_layer_ffn_batch(
                                                   layer->ffn_norm->abs_offset,
                                                   DS4_N_EMBD,
                                                   n_tokens,
-                                                  DS4_RMS_EPS) != 0;
+                                                  DS4_RMS_EPS,
+                                                  layer->ffn_norm->type == DS4_TENSOR_BF16) != 0;
     }
     if (ok) {
         metal_graph_debug_dump_tensor("ffn_norm", g->batch_ffn_norm,
@@ -20881,7 +20897,8 @@ static bool metal_graph_eval_mtp_draft_from_hc(
                                                   mtp_model->size,
                                                   mtp->enorm->abs_offset,
                                                   DS4_N_EMBD,
-                                                  DS4_RMS_EPS) != 0;
+                                                  DS4_RMS_EPS,
+                                                  mtp->enorm->type == DS4_TENSOR_BF16) != 0;
     if (ok) ok = matmul_auto_tensor(g->mtp_eproj,
                                               mtp_model->map,
                                               mtp_model->size,
@@ -20902,7 +20919,8 @@ static bool metal_graph_eval_mtp_draft_from_hc(
                                                        mtp->hnorm->abs_offset,
                                                        DS4_N_EMBD,
                                                        DS4_N_HC,
-                                                       DS4_RMS_EPS) != 0;
+                                                       DS4_RMS_EPS,
+                                                       mtp->hnorm->type == DS4_TENSOR_BF16) != 0;
     if (ok) ok = matmul_auto_tensor(g->mtp_hproj_hc,
                                               mtp_model->map,
                                               mtp_model->size,

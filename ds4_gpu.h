@@ -349,7 +349,8 @@ int ds4_gpu_rms_norm_weight_tensor(
         uint64_t                model_size,
         uint64_t                weight_offset,
         uint32_t                n,
-        float                   eps);
+        float                   eps,
+        int                     norm_is_bf16);
 
 int ds4_gpu_rms_norm_weight_rows_tensor(
         ds4_gpu_tensor       *out,
@@ -359,7 +360,8 @@ int ds4_gpu_rms_norm_weight_rows_tensor(
         uint64_t                weight_offset,
         uint32_t                n,
         uint32_t                rows,
-        float                   eps);
+        float                   eps,
+        int                     norm_is_bf16);
 
 int ds4_gpu_dsv4_qkv_rms_norm_rows_tensor(
         ds4_gpu_tensor       *q_out,
@@ -949,7 +951,8 @@ int ds4_gpu_hc_split_weighted_sum_norm_tensor(
         uint32_t                n_hc,
         uint32_t                sinkhorn_iters,
         float                   eps,
-        float                   norm_eps);
+        float                   norm_eps,
+        int                     norm_is_bf16);
 
 int ds4_gpu_output_hc_weights_tensor(
         ds4_gpu_tensor       *out,
