@@ -13447,19 +13447,19 @@ extern "C" int ds4_gpu_hc_expand_split_half_tensor(
 }
 
 extern "C" int ds4_gpu_hc_expand_add_split_tensor(ds4_gpu_tensor *out_hc, const ds4_gpu_tensor *block_out, const ds4_gpu_tensor *block_add, const ds4_gpu_tensor *residual_hc, const ds4_gpu_tensor *split, uint32_t n_embd, uint32_t n_hc) {
-    if (!out_hc || !block_out || !block_add || !residual_hc || !split || n_embd == 0 || n_hc == 0) return 0;
+    if (!out_hc || !block_out || !residual_hc || !split || n_embd == 0 || n_hc == 0) return 0;
     uint32_t n_tokens = (uint32_t)(out_hc->bytes / ((uint64_t)n_hc * n_embd * sizeof(float)));
     uint32_t mix_hc = 2u * n_hc + n_hc * n_hc;
     uint64_t n_elem = (uint64_t)n_tokens * n_hc * n_embd;
     const float *base = (const float *)split->ptr;
     hc_expand_kernel<<<(n_elem + 255) / 256, 256>>>((float *)out_hc->ptr,
                                                     (const float *)block_out->ptr,
-                                                    (const float *)block_add->ptr,
+                                                    block_add ? (const float *)block_add->ptr : (const float *)block_out->ptr,
                                                     (const float *)residual_hc->ptr,
                                                     base + n_hc,
                                                     base + 2u * n_hc,
                                                     n_embd, n_hc, n_tokens,
-                                                    mix_hc, mix_hc, 1);
+                                                    mix_hc, mix_hc, block_add ? 1 : 0);
     return cuda_ok(cudaGetLastError(), "hc_expand_add_split launch");
 }
 
