@@ -55,7 +55,15 @@ EKLENEN YENİ ÖZELLİKLER:
 | **FP8 KV cache (auto)** | ✅ Tamamlandı | Safetensors algılayınca otomatik etkin |
 | **Distributed (safetensors)** | ✅ Tamamlandı | Aynı SSD streaming mekanizması |
 | **FP8 KV cache (GPU)** | ✅ Tamamlandı | `fp32_to_fp8_e4m3_kernel` + `ds4_fp8_kv_cache_append_gpu` + `ds4_gpu_kv_fp8_quantize_append_tensor` |
-| **End-to-end test** | ⏳ Bekliyor | Model yükleme + inference |
+| **BF16 embedding decode** | ✅ Tamamlandı | `bf16_to_float` device + `cpu_bf16_to_float` CPU fonksiyonları |
+| **BF16 norm weights** | ✅ Tamamlandı | Fused kernel + rms_norm_weight fonksiyonları BF16→F32 dönüşümü |
+| **Safetensors offset fix** | ✅ Tamamlandı | `data_offset` data section başlangıcına görelidir, `sm->data_offset + st->data_offset` gerekli |
+| **F8_E4M3 block-scaled GEMV** | ✅ Tamamlandı | `gemv_f8e4m3_scaled_kernel` + `d_f8e8m0` decode |
+| **HC expand NULL fix** | ✅ Tamamlandı | `block_add=NULL` durumunda `has_add=0` |
+| **F8_E4M3 attn_output** | ✅ Tamamlandı | `hc_expand` path'te F8 GEMV NVFP4 yerine doğru kullanılıyor |
+| **End-to-end inference** | ✅ İlk Token Üretimi | Model inference yapıyor (0.42 prefill t/s, 4.39 gen t/s) |
+| **Numerik Doğruluk** | ⏳ Bekliyor | F8_E4M3/NVFP4 block scale kernel'ları numerical accuracy gerektirir |
+| **Debug Logging** | ⏳ Temizlenecek | Debug fprintf'lar kaldırılmalı |
 
 ### ⚠️ Tespit Edilen Sorunlar (Debug Sonucu)
 
@@ -64,8 +72,14 @@ EKLENEN YENİ ÖZELLİKLER:
 | 1 | **Q8_0 hardcoded dispatch** — Safetensors modelde tüm matmul çağrıları Q8_0 formatı varsayıyordu | ✅ Çözüldü | Kritik |
 | 2 | **F8/NVFP4 weight pointer** — `model_map + offset` yerine `cuda_model_range_ptr` kullanılmıyordu | ✅ Çözüldü | Kritik |
 | 3 | **E4M3 decode hatası** — `d_f8e4m3` E3M4 formatında kodlanmıştı (3-bit exp, 4-bit mantissa) | ✅ Çözüldü | Kritik |
-| 4 | **F8_E4M3 block scales eksik** — Attention weight'lerinde F8_E8M0 block_scale tensor'leri var ama GEMV kernel'ı bunları kullanmıyor | ⏳ Çözülmedi | Yüksek |
-| 5 | **NVFP4 scale tensor ayrılığı** — Safetensors'ta weight ve scale ayrı tensor olarak saklanıyor ama kernel interleave bekliyor | ⏳ Çözülmedi | Kritik |
+| 4 | **F8_E4M3 block scales eksik** — Attention weight'lerinde F8_E8M0 block_scale tensor'leri var ama GEMV kernel'ı bunları kullanmıyor | ✅ Çözüldü | Kritik |
+| 5 | **NVFP4 scale tensor ayrılığı** — Safetensors'ta weight ve scale ayrı tensor olarak saklanıyor ama kernel interleave bekliyor | ✅ Çözüldü (partial) | Kritik |
+| 6 | **Safetensors data_offset hatası** — `data_offsets` data section başlangıcına görelidir ama kod file-relative kullanıyordu | ✅ Çözüldü | Kritik |
+| 7 | **BF16 embedding decode** — `embed_token_hc_kernel` FP16 `__half2float` kullanıyordu ama model BF16 | ✅ Çözüldü | Kritik |
+| 8 | **BF16 norm weights** — RMS norm weight'leri BF16 ama kod F32 olarak okuyordu | ✅ Çözüldü | Kritik |
+| 9 | **mmap pointer CPU access** — `cuda_model_range_ptr` GPU pointer döndürüyor ama CPU'da okunuyordu | ✅ Çözüldü | Kritik |
+| 10 | **NULL block_add crash** — `hc_expand_add_split_tensor` block_add=NULL ile çağrılıyor ama kernel her zaman dereference ediyordu | ✅ Çözüldü | Kritik |
+| 11 | **F8_E4M3 wrong dispatch** — `hc_expand` path'inde F8_E4M3 weight NVFP4 GEMV ile işleniyordu | ✅ Çözüldü | Yüksek |
 
 ### Safetensors Weight Formatları (Model Analizi)
 
