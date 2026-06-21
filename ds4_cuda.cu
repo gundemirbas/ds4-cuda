@@ -13795,7 +13795,7 @@ int ds4_gpu_matmul_nvfp4_tensor(
     float ws2 = 0.0f;
     if (scale_offset != 0) {
         /* Block scales: [out_dim, in_dim/8] */
-        uint64_t scale_bytes = out_dim * (in_dim / 8);
+        uint64_t scale_bytes = out_dim * (in_dim / 16);
         ws = (const uint8_t *)cuda_model_range_ptr(model_map, scale_offset, scale_bytes, "nvfp4_scale");
         /* Global scale is right after block scales: F32 scalar */
         uint64_t global_scale_offset = scale_offset + scale_bytes;
@@ -14263,11 +14263,11 @@ __global__ void gemv_nvfp4_kernel(const float *x, const uint8_t *w, const uint8_
     if (row >= M) return;
     float sum = 0.0f;
     int K_packed = K / 2;            /* bytes per row */
-    int scales_per_row = K / 8;      /* 1 F8_E4M3 scale per 8 values */
+    int scales_per_row = K / 16;     /* 1 F8_E4M3 scale per 16 values */
     for (int j = 0; j < K_packed; j++) {
         uint8_t p = w[row * K_packed + j];
         int elem_idx = j * 2;
-        int scale_idx = elem_idx / 8;
+        int scale_idx = elem_idx / 16;
         float sc = d_f8e4m3(ws[row * scales_per_row + scale_idx]);
         /* Lower nibble: even index */
         sum += d_e2m1(p & 0xF) * ws2 * sc * x[elem_idx];
