@@ -13871,6 +13871,8 @@ int ds4_gpu_matmul_f8e4m3_tensor(
                                        (float*)out->ptr, (int)out_dim, (int)in_dim,
                                        ws, 128, 128);
         } else {
+            fprintf(stderr, "ds4: F8_E4M3 GEMV scale NOT FOUND at %llu (in=%llu out=%llu)\n",
+                    (unsigned long long)scale_offset, (unsigned long long)in_dim, (unsigned long long)out_dim);
             /* Fallback: no scale, use unscaled */
             launch_gemv_f8e4m3((const float*)x->ptr, (const uint8_t*)w,
                                (float*)out->ptr, (int)out_dim, (int)in_dim);
