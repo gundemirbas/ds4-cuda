@@ -11728,6 +11728,18 @@ static void metal_graph_debug_dump_tensor(
     }
 }
 
+/* Lightweight NaN check: print first 4 values of a GPU tensor */
+static void ds4_check_nan(const char *label, ds4_gpu_tensor *t, uint64_t n_f32, uint32_t il) {
+    if (il != 0) return; /* Only check layer 0 */
+    if (ds4_gpu_synchronize() == 0) return;
+    float buf[4];
+    if (ds4_gpu_tensor_read(t, 0, buf, sizeof(buf)) != 0) {
+        fprintf(stderr, "ds4: [%s] L%u [0..3]=%g %g %g %g%s\n", label, il,
+                (double)buf[0], (double)buf[1], (double)buf[2], (double)buf[3],
+                (buf[0] != buf[0] || buf[1] != buf[1]) ? " ***NaN***" : "");
+    }
+}
+
 static void metal_graph_debug_dump_f16_tensor(
         const char       *name,
         ds4_gpu_tensor *t,
@@ -15876,6 +15888,10 @@ static bool metal_graph_encode_decode_layer(
                                                                     1,
                                                                     layer->attn_q_a->type, layer->attn_q_a->scale_offset) != 0;
     if (!ok) fprintf(stderr, "ds4: L%u FAILED after Q/R matmul\n", il);
+    if (ok && il == 0) {
+        ds4_check_nan("Q/R matmul", g->qr, q_rank, il);
+        ds4_check_nan("KV matmul", g->kv_raw, DS4_N_HEAD_DIM, il);
+    }
     if (ok) {
         metal_graph_debug_dump_tensor("q_lora", g->qr, q_rank, il, pos);
     }
@@ -16341,6 +16357,9 @@ static bool metal_graph_encode_decode_layer(
     }
     DS4_METAL_PROFILE_DECODE_STAGE("attention");
     if (!ok) fprintf(stderr, "ds4: L%u FAILED at attention\n", il);
+    if (ok && il == 0) {
+        ds4_check_nan("after attention", g->heads, q_dim, il);
+    }
     if (ok) {
         metal_graph_debug_dump_tensor("kqv_out", g->heads, q_dim, il, pos);
     }
@@ -16372,6 +16391,9 @@ static bool metal_graph_encode_decode_layer(
                                                       n_groups,
                                                       g->heads) != 0;
         if (!ok) fprintf(stderr, "ds4: L%u FAILED after attn_output_low_q8\n", il);
+        if (ok && il == 0) {
+            ds4_check_nan("attn_low", g->attn_low, (uint64_t)n_groups * rank, il);
+        }
         if (ok) {
             ok = ds4_gpu_matmul_q8_0_hc_expand_tensor(g->after_attn_hc,
                                                         g->attn_out,
@@ -16408,6 +16430,9 @@ static bool metal_graph_encode_decode_layer(
     }
     if (ok) {
         metal_graph_debug_dump_tensor("attn_out", g->attn_out, DS4_N_EMBD, il, pos);
+    }
+    if (ok && il == 0) {
+        ds4_check_nan("attn_out", g->attn_out, DS4_N_EMBD, il);
     }
     if (ok && metal_graph_directional_steering_attn_enabled(g)) {
         ok = metal_graph_apply_directional_steering_attn(g, g->attn_out, il, 1);
