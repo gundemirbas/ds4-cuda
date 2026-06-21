@@ -9672,10 +9672,13 @@ extern "C" int ds4_gpu_attention_output_low_q8_tensor(
             const float *xg = in_ptr + (uint64_t)g * group_dim;
             float *yg = out_ptr + (uint64_t)g * rank;
             if (scale_offset != 0) {
-                uint64_t scale_entry_bytes = (group_dim / 128);
-                uint64_t group_scale_offset = scale_offset + (uint64_t)g * rank * scale_entry_bytes;
+                /* Scale tensor layout: [out_rows/128, in_cols/128] = [rank/128, group_dim/128] per group */
+                uint64_t scale_cols = group_dim / 128;
+                uint64_t scale_rows_per_group = rank / 128;
+                uint64_t group_scale_offset = scale_offset + (uint64_t)g * scale_rows_per_group * scale_cols;
+                uint64_t group_scale_bytes = scale_rows_per_group * scale_cols;
                 const uint8_t *ws = (const uint8_t *)cuda_model_range_ptr(model_map, group_scale_offset,
-                                                                          (uint64_t)rank * scale_entry_bytes,
+                                                                          group_scale_bytes,
                                                                           "attn_out_a_scale");
                 if (ws) {
                     launch_gemv_f8e4m3_scaled(xg, wg, yg, (int)rank, (int)group_dim, ws, 128, 128);
