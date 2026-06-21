@@ -23992,9 +23992,8 @@ static int generate_raw_swa_cpu(
         }
 
         int token = sample_argmax(logits, DS4_N_VOCAB);
-        if (token == vocab->eos_id) break;
-
-        {
+        fprintf(stderr, "ds4: TOKEN=%d\n", token);
+        if (token == vocab->eos_id) break;       {
             static int dbg_gen = 0;
             if (dbg_gen < 3) {
                 float top[3] = {-1e30f, -1e30f, -1e30f};
@@ -24183,9 +24182,8 @@ static int generate_metal_graph_raw_swa(
         }
 
         int token = sample_argmax(logits, DS4_N_VOCAB);
-        if (token == vocab->eos_id) break;
-
-        {
+        fprintf(stderr, "ds4: TOKEN2=%d\n", token);
+        if (token == vocab->eos_id) break;       {
             static int dbg_gen = 0;
             if (dbg_gen < 3) {
                 float top[3] = {-1e30f, -1e30f, -1e30f};
