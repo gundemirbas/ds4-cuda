@@ -9631,6 +9631,11 @@ extern "C" int ds4_gpu_attention_output_q8_batch_f16_tensor(
     return 0;
 }
 
+/* Forward declarations for F8 E4M3 GEMV kernels */
+static void launch_gemv_f8e4m3(const float *x, const uint8_t *w, float *y, int M, int N);
+static void launch_gemv_f8e4m3_scaled(const float *x, const uint8_t *w, float *y, int M, int N,
+                                      const uint8_t *scales, int block_rows, int block_cols);
+
 extern "C" int ds4_gpu_attention_output_low_q8_tensor(
         ds4_gpu_tensor       *low,
         const void             *model_map,
@@ -9639,31 +9644,72 @@ extern "C" int ds4_gpu_attention_output_low_q8_tensor(
         uint64_t                group_dim,
         uint64_t                rank,
         uint32_t                n_groups,
-        const ds4_gpu_tensor *heads) {
+        const ds4_gpu_tensor *heads,
+        uint32_t                weight_type,
+        uint64_t                scale_offset) {
     if (!low || !heads || !model_map || group_dim == 0 || rank == 0 || n_groups == 0) {
         return 0;
     }
     const uint64_t low_dim = (uint64_t)n_groups * rank;
+
+    /* F8_E4M3 path: weight is [n_groups * rank][group_dim] in F8_E4M3 */
+    if (weight_type == 34 /* F8_E4M3 */) {
+        const uint64_t weight_bytes = low_dim * group_dim;
+        const char *w = cuda_model_range_ptr(model_map, out_a_offset, weight_bytes, "attn_out_a_f8");
+        if (!w) {
+            fprintf(stderr, "ds4: attn_output_low_f8: wptr NULL at offset %llu size %llu\n",
+                    (unsigned long long)out_a_offset, (unsigned long long)weight_bytes);
+            return 0;
+        }
+        if (heads->bytes < (uint64_t)n_groups * group_dim * sizeof(float) ||
+            low->bytes < low_dim * sizeof(float)) return 0;
+        /* For each group, multiply weight[rank × group_dim]^T × heads[group_dim] → output[rank] */
+        float *out_ptr = (float *)low->ptr;
+        const float *in_ptr = (const float *)heads->ptr;
+        const uint8_t *w_u8 = (const uint8_t *)w;
+        for (uint32_t g = 0; g < n_groups; g++) {
+            const uint8_t *wg = w_u8 + (uint64_t)g * rank * group_dim;
+            const float *xg = in_ptr + (uint64_t)g * group_dim;
+            float *yg = out_ptr + (uint64_t)g * rank;
+            if (scale_offset != 0) {
+                uint64_t scale_entry_bytes = (group_dim / 128);
+                uint64_t group_scale_offset = scale_offset + (uint64_t)g * rank * scale_entry_bytes;
+                const uint8_t *ws = (const uint8_t *)cuda_model_range_ptr(model_map, group_scale_offset,
+                                                                          (uint64_t)rank * scale_entry_bytes,
+                                                                          "attn_out_a_scale");
+                if (ws) {
+                    launch_gemv_f8e4m3_scaled(xg, wg, yg, (int)rank, (int)group_dim, ws, 128, 128);
+                } else {
+                    launch_gemv_f8e4m3(xg, wg, yg, (int)rank, (int)group_dim);
+                }
+            } else {
+                launch_gemv_f8e4m3(xg, wg, yg, (int)rank, (int)group_dim);
+            }
+        }
+        (void)cudaDeviceSynchronize();
+        return cuda_ok(cudaGetLastError(), "attention_output_low_f8");
+    }
+
     const uint64_t blocks_a = (group_dim + 31) / 32;
-    const uint64_t out_a_bytes = (uint64_t)n_groups * rank * blocks_a * 34;
+    const uint64_t out_a_bytes_q8 = (uint64_t)n_groups * rank * blocks_a * 34;
     if (out_a_offset > model_size ||
-        out_a_bytes > model_size - out_a_offset ||
+        out_a_bytes_q8 > model_size - out_a_offset ||
         heads->bytes < (uint64_t)n_groups * group_dim * sizeof(float) ||
         low->bytes < low_dim * sizeof(float)) {
         return 0;
     }
     const unsigned char *out_a = reinterpret_cast<const unsigned char *>(
-            cuda_model_range_ptr(model_map, out_a_offset, out_a_bytes, "attn_out_a"));
+            cuda_model_range_ptr(model_map, out_a_offset, out_a_bytes_q8, "attn_out_a"));
     if (!out_a) return 0;
 
     const uint64_t x_rows = (uint64_t)n_groups;
     const uint64_t xq_bytes = x_rows * blocks_a * 32u;
-    const uint64_t scale_offset = (xq_bytes + 15u) & ~15ull;
-    const uint64_t tmp_bytes = scale_offset + x_rows * blocks_a * sizeof(float);
+    const uint64_t q8_scale_off = (xq_bytes + 15u) & ~15ull;
+    const uint64_t tmp_bytes = q8_scale_off + x_rows * blocks_a * sizeof(float);
     void *tmp = cuda_tmp_alloc(tmp_bytes, "attention output low q8 prequant");
     if (!tmp) return 0;
     int8_t *xq = (int8_t *)tmp;
-    float *xscale = (float *)((char *)tmp + scale_offset);
+    float *xscale = (float *)((char *)tmp + q8_scale_off);
     const int use_dp4a = cuda_q8_use_dp4a();
     dim3 qgrid((unsigned)blocks_a, (unsigned)x_rows, 1);
     quantize_q8_0_f32_kernel<<<qgrid, 32>>>(xq,

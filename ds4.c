@@ -16389,7 +16389,9 @@ static bool metal_graph_encode_decode_layer(
                                                       group_dim,
                                                       rank,
                                                       n_groups,
-                                                      g->heads) != 0;
+                                                      g->heads,
+                                                      layer->attn_output_a->type,
+                                                      layer->attn_output_a->scale_offset) != 0;
         if (!ok) fprintf(stderr, "ds4: L%u FAILED after attn_output_low_q8\n", il);
         if (ok && il == 0) {
             ds4_check_nan("attn_low", g->attn_low, (uint64_t)n_groups * rank, il);

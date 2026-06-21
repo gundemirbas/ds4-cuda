@@ -758,7 +758,9 @@ int ds4_gpu_attention_output_low_q8_tensor(
         uint64_t                group_dim,
         uint64_t                rank,
         uint32_t                n_groups,
-        const ds4_gpu_tensor *heads);
+        const ds4_gpu_tensor *heads,
+        uint32_t                weight_type,
+        uint64_t                scale_offset);
 
 /* =========================================================================
  * Router, Shared Expert, and Routed MoE.
