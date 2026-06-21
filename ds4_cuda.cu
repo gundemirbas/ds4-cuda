@@ -13546,8 +13546,14 @@ extern "C" int ds4_gpu_matmul_q8_0_hc_expand_tensor(
     if (weight_type == 34 /* F8_E4M3 */) {
         int ok = ds4_gpu_matmul_f8e4m3_tensor(block_out, model_map, model_size,
                                                weight_offset, in_dim, out_dim, x, 1, scale_offset);
+        if (!ok) fprintf(stderr, "ds4: F8_E4M3 matmul failed in hc_expand (in=%llu out=%llu scale=%llu)\n",
+                          (unsigned long long)in_dim, (unsigned long long)out_dim,
+                          (unsigned long long)scale_offset);
         if (ok) ok = ds4_gpu_hc_expand_add_split_tensor(out_hc, block_out, NULL,
                                                          residual_hc, split, n_embd, n_hc);
+        if (!ok && ds4_gpu_matmul_f8e4m3_tensor(block_out, model_map, model_size,
+                                               weight_offset, in_dim, out_dim, x, 1, scale_offset))
+            fprintf(stderr, "ds4: hc_expand_add_split failed\n");
         return ok;
     }
     if (getenv("DS4_CUDA_DISABLE_Q8_HC_EXPAND_FUSED") == NULL) {
