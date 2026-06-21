@@ -15790,6 +15790,17 @@ static bool metal_graph_encode_decode_layer(
                                        layer->hc_attn_base->abs_offset);
     }
     DS4_METAL_PROFILE_DECODE_STAGE("attn_hc_pre");
+    /* Debug: check attn_cur after hc_pre */
+    {
+        static int dbg = 0;
+        if (dbg < 3 && ok) {
+            float h_cur[4];
+            ds4_gpu_tensor_read(g->attn_cur, 0, h_cur, sizeof(h_cur));
+            fprintf(stderr, "ds4: attn_cur (pre-norm) out[0..3]=%f %f %f %f\n",
+                    h_cur[0], h_cur[1], h_cur[2], h_cur[3]);
+            dbg++;
+        }
+    }
     if (ok) {
         metal_graph_debug_dump_tensor("hc_attn_pre_mixes", g->hc_mix, mix_hc, il, pos);
         metal_graph_debug_dump_tensor("hc_attn_pre_weights", g->hc_pre, DS4_N_HC, il, pos);
